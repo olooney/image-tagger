@@ -10,14 +10,14 @@ description.
 
 Rename arbitrary image filenames to clean, human-readable filenames.
 
-Prepare a static HTML gallery of the images.
+Prepare a static HTML gallery of images and metadata.
 
 
 Usage
 -----
 
 You will need to put your OpenAI API key in a file called
-`.openai/credentials.yaml` in this format:
+`~/.openai/credentials.yaml` in this format:
 
 
     organization: "YOUR ORG KEY HERE" # Test Project
@@ -62,16 +62,24 @@ Sample Gallery
 
 View a sample [Image Tagger Gallery](https://olooney.github.io/image_tagger/gallery/index.html).
 
-I've added a "notes" column with manual annotations that I added after
-reviewing the results to document where it did notably well or poorly, or where
-it's behavior is notably different from the earlier gpt-4v.
+For this sample gallery, I added a "notes" column with manual annotations to
+document where it did notably well or poorly, or where it's behavior is notably
+different from the earlier gpt-4v.
 
-The images in this gallery come from here:
+The images in this gallery mostly come from here:
 
 1. [ICM Quality Mix Vol. 57 - Modern Martyrs](https://imgur.com/gallery/icm-quality-mix-vol-57-modern-martyrs-zcEiD6A)
 2. [ICM Quality Mix Vol. 55 - Cooler Heads](https://imgur.com/gallery/icm-quality-mix-vol-55-cooler-heads-QQjYFFS)
 
-Plus a list of test images I had previously used for gpt-4v.
+ICM is a project of [MetaPathos](https://imgur.com/user/MetaPathos/posts) and
+was choosen because it is an extremely diverse collection of images in
+different styles and often oblique humor or references which should challege
+gpt-4o.
+
+In addition to the ICM images, there were also a few dozen other test images I
+had previously used for gpt-4v. Most of these were chosen to exercise specific
+features such as occluded object detection or susceptibility to malicious
+prompts hidden within images.
 
 
 Source
