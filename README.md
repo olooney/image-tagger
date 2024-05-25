@@ -20,16 +20,20 @@ You will need to put your OpenAI API key in a file called
 `.openai/credentials.yaml` in this format:
 
 
-    organization: "YOUR ORG KEY HERE" # Test Project
-    api_key: "YOUR API KEY HERE"
+```python
+organization: "YOUR ORG KEY HERE" # Test Project
+api_key: "YOUR API KEY HERE"
+```
 
 Then you can generate a `metadata.csv` file for a given directory of images
 like so:
 
-    import image_tagger as it
+```python
+import image_tagger as it
 
-    filepaths = it.find_images(image_dir)
-    it.tag_images(filepaths, metadata_filename)
+filepaths = it.find_images(image_dir)
+it.tag_images(filepaths, metadata_filename)
+```
 
 This file contains a discription, tags, and other metadata that gpt-4o can
 infer from looking at the image itself.
@@ -39,11 +43,15 @@ a new, clean filename for each file in the format `lower_snake_case.png`.
 To automatically rename all the images listed in the CSV to their suggested
 clean filenames, you can use:
 
-    it.autorename(metadata_filename, verbose=1, dry_run=False)
+```python
+it.autorename(metadata_filename, verbose=1, dry_run=False)
+```
 
 Finally, run:
 
-    it.generate_gallery(metadata_filename, gallery_filename)
+```python
+it.generate_gallery(metadata_filename, gallery_filename)
+```
 
 to generate an static `index.html` file which shows each image listed in
 `metadata.csv` side-by-side with its inferred metadata. The gallery also as a
@@ -71,9 +79,9 @@ Plus a list of test images I had previously used for gpt-4v.
 Source
 ------
 
-This Jupyter 
-[notebook](https://github.com/olooney/image_tagger/blob/main/src/Image%20Tagger%20Test.ipynb)
-contains an example of use.
+This [Jupyter notebook](https://github.com/olooney/image_tagger/blob/main/src/Image%20Tagger%20Test.ipynb)
+contains an example of use, including generating test images by scrambling
+filenames and some summary visualizations.
 
 The main
 [`image_tagger.py`](https://github.com/olooney/image_tagger/blob/main/src/image_tagger.py)
