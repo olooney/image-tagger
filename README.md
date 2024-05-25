@@ -20,10 +20,8 @@ You will need to put your OpenAI API key in a file called
 `.openai/credentials.yaml` in this format:
 
 
-```python
-organization: "YOUR ORG KEY HERE" # Test Project
-api_key: "YOUR API KEY HERE"
-```
+    organization: "YOUR ORG KEY HERE" # Test Project
+    api_key: "YOUR API KEY HERE"
 
 Then you can generate a `metadata.csv` file for a given directory of images
 like so:
