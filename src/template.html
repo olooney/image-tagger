@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Gallery</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    
+    <script>
+        function filterGallery() {
+            // grab and parse the search field
+            var input = document.getElementById("searchInput");
+            var searchTerms = input.value.toUpperCase().split(/\s+/); // split on whitespace
+    
+            // loop over the rows of the gallery. Each row is one image and its metadata.
+            var rows = document.getElementsByClassName("gallery-image");    
+            for ( var i = 0; i < rows.length; i++ ) {
+                var rowDiv = rows[i];
+                var rowText = (rowDiv.textContent || rowDiv.innerText).toUpperCase();
+        
+                // check if all terms are present in the row's text
+                var allMatch = searchTerms.every(term => rowText.includes(term));
+    
+                // show or hide the div.
+                rowDiv.style.display = ( allMatch ? "" : "none" );
+            }
+        }
+    </script>
+    <style>
+        .tag-pillbox {
+            margin: 0px;
+            padding: 0px;
+            display: inline-block;
+        }
+        .tag-pill {
+            display: inline-block;
+            padding: 3px 8px;
+            margin: 2px;
+            background-color: #f2f2f2;
+            border-radius: 25px;
+            color: #333;
+            border: 1px solid #ccc;
+        }
+        .gallery-notes {
+            color: #800000;
+        }
+    </style>
+</head>
+<body>
+
+    <header class="py-3" style="background-color: #800000; font-family: Garamond, 'Times New Roman', serif;">
+        <div class="container">
+            <h1 class="text-left">
+                <a href="https://www.oranlooney.com" style="color: white; text-decoration: none;">
+                    OWL
+                </a>
+            </h1>
+        </div>
+    </header>
+
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="text-left">GPT-4o Image Annotation</h1>
+                <hr>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mt-3">
+        <input type="text" id="searchInput" onkeyup="filterGallery()" placeholder="Search images..." class="form-control mb-4">
+    </div>
+
+    <div class="container">
+        {% for item in items %}
+            <div class="gallery-image row mb-4">
+                <div class="col-md-6">
+                    <img src="{{ item.clean_filename }}" alt="Image" class="img-fluid">
+                </div>
+                <div class="col-md-6">
+                    <div class="row">
+                        <div class="col-sm-6">
+                            <div><strong>Timestamp:</strong> {{ item.formatted_timestamp }}</div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div><strong>Status:</strong> {{ item.status }}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-sm-6">
+                            <div><strong>Total Tokens:</strong> {{ item.total_tokens }}</div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div><strong>Model:</strong> {{ item.model }}</div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-sm-6">
+                            <div><strong>Width:</strong> {{ item.width }}</div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div><strong>Height:</strong> {{ item.height }}</div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-sm-6">
+                            <div><strong>Category:</strong> {{ item.category }}</div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div><strong>Genre:</strong> {{ item.genre }}</div>
+                        </div>
+                    </div>
+
+                    <!-- Filenames -->
+                    <div><strong>Original Filename:</strong> {{ item.original_filename }}</div>
+                    <div><strong>Clean Filename:</strong> {{ item.clean_filename }}</div>
+
+                    <!-- Tags -->
+                    <div>
+                        <strong>Tags:</strong>
+                        <ul class="tag-pillbox">
+                        {% for tag in item.tags %}
+                            <li class="tag-pill">{{ tag }}</li>
+                        {% endfor %}
+                        </ul>
+                    </div>
+                    
+                    <!-- Long Description -->
+                    <div><strong>Description:</strong> {{ item.description }}</div>
+
+                    <!-- Additioanl Notes -->
+                    {% if item.notes %}
+                        <div class="gallery-notes"><strong>Oran's Notes:</strong> {{ item.notes }}</div>
+                    {% endif %}
+
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+    
+</body>
+</html>
