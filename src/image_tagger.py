@@ -18,12 +18,24 @@ import pandas as pd
 from PIL import Image
 import requests
 import jinja2
+from pydantic import BaseModel
+from typing import List
 
 from util import (
     connect_to_openai,
     retry_decorator,
     TemporarySeed
 )
+
+class ImageTagData(BaseModel):
+    description: str
+    category: str
+    genre: str
+    tags: List[str]
+    filename_already_makes_sense: bool
+    filename: str
+
+
 
 NAME_IMAGE_PROMPT_TEMPLATE = """Describe this image, come up with a good filename for it,
 and determine category, genre, and tags for the image.
@@ -54,17 +66,6 @@ Only one category can be chosen.
 The tags should be a list of relevant topics or themes that may help users
 to find this image while searching.
 
-Format your answer as a JSON object in this example format:
-
-    {{
-        "description": "A cat sitting on a red blanket.",
-        "category": "photo",
-        "genre": "realism",
-        "tags": ["cozy", "domestic", "hygge", "pet"],
-        "filename_already_makes_sense": false,
-        "filename": "cat_red_blanket.jpg"
-    }}
-
 Current filename: "{filename}"
 """
 
@@ -92,6 +93,7 @@ client = connect_to_openai()
 
 
 def clean_filename(filename):
+    """Cleans up a filename by removing unloved characters."""
     filename = filename.lower()
     filename = re.sub(r'^[^a-zA-Z_]+', '', filename) # strip leading whitespace
     filename = re.sub(r'[\s_-]+', '_', filename) # whitespace to underscore
@@ -101,7 +103,13 @@ def clean_filename(filename):
     return filename
 
 
-def fix_extension(current_filename, suggested_filename):
+def fix_extension(current_filename: str, suggested_filename: str) -> str:
+    """
+    Ensures that the suggested filename has to correct extension, which
+    is something GPT-4o seems to struggle with. Renaming an image file to
+    have the wrong extension will create a mismatch between the contents
+    and extension, something we want to avoid.
+    """
     current_ext = os.path.splitext(current_filename)[1].lower()
     suggested_base, suggested_ext = os.path.splitext(suggested_filename)
     if current_ext != suggested_ext:
@@ -109,7 +117,11 @@ def fix_extension(current_filename, suggested_filename):
     return suggested_filename
 
 
-def path_name_ext(path):
+def path_name_ext(path: str) -> (str, str, str):
+    """
+    Splits a full path name into a directory, base name,
+    and extension, e.g. ("/static/images/", "logo", ".png")
+    """
     dir_path = os.path.dirname(path)
     filename_with_ext = os.path.basename(path)
     filename, ext = os.path.splitext(filename_with_ext)
@@ -118,12 +130,20 @@ def path_name_ext(path):
     return (dir_path, filename, ext)
 
 
-def scramble(filename):
+def scramble(filename: str) -> str:
+    """Hashes a filename to obscure it. Only used for testing."""
     with TemporarySeed(seed=hash(filename)):
         return "".join(random.sample(string.ascii_letters, k=8))
 
 
-def resize_image_to_fit(image, max_dimension=512):
+def resize_image_to_fit(image: Image, max_dimension: int = 512) -> Image:
+    """
+    Resizes the image to always fit within a 512x512 square
+    regardless of aspect ratio. The returned image will always
+    be smaller than 512 along both dimensions but will preserve
+    its original aspect ratio. This allows it to consume only
+    one "tile" in the GPT-4o API.
+    """
     # read from disk if given as filename
     if isinstance(image, str):
         image = Image.open(image)
@@ -145,7 +165,11 @@ def resize_image_to_fit(image, max_dimension=512):
     return image
 
 
-def base64_encode_image(image):
+def base64_encode_image(image: Image) -> str:
+    """
+    Encodes a Pillow image as base64 in a format GPT-4o
+    will accept.
+    """
     img_buffer = BytesIO()
     image.save(img_buffer, format='PNG')
     img_byte_data = img_buffer.getvalue()
@@ -157,26 +181,31 @@ def base64_encode_image(image):
     return base64_image_data
 
 
-@retry_decorator
-def gpt_vision(url, prompt):
-    chat_response = client.chat.completions.create(
+#@retry_decorator
+def gpt_vision(url, prompt, response_format=None):
+
+    # { "type": "json_object" }
+    
+    #chat_response = client.chat.completions.create(
+    chat_response = client.beta.chat.completions.parse(
         model="gpt-4o",
-        response_format={ "type": "json_object" },
+        response_format=response_format,
         temperature=0.0,
         max_tokens=1024,
         messages=[
             {
-              "role": "user",
-              "content": [
-                {"type": "text", "text": prompt},
-                {
-                  "type": "image_url",
-                  "image_url": {
-                      "url": url,
-                  },
-                },
-              ],
-            }
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": { "url": url },
+                    },
+                ],
+            },
         ],
     )
     return chat_response
@@ -199,11 +228,14 @@ def tag_image(filepath: str) -> dict:
     base64_image_data = base64_encode_image(image)
     url = f"data:image/jpeg;base64,{base64_image_data}"
 
-    # prepare the prompt
+    # pass the image to GPT-4o and get JSON back
     prompt = NAME_IMAGE_PROMPT_TEMPLATE.format(filename=filename)
-    response = gpt_vision(url, prompt)
+    response = gpt_vision(url, prompt, ImageTagData)
     json_string = response.choices[0].message.content
     data = json.loads(json_string)
+
+    # validate the response
+    ImageTagData(**data) 
 
     # clean up the suggested filename and fix the extension if necessary
     suggested_filename = clean_filename(data.get('filename', None))
@@ -214,7 +246,6 @@ def tag_image(filepath: str) -> dict:
     data['original_filepath'] = filepath
     data['original_filename'] = filename
     data['total_tokens'] = response.usage.total_tokens
-    data['tags'] = ";".join( tag.lower().strip() for tag in data['tags'] )
     data['model'] = response.model
     data['width'] = image.size[0]
     data['height'] = image.size[1]
@@ -231,9 +262,10 @@ def tag_images(filepaths, output_filename, retry_errors=False, verbose=1):
         with open(output_filename, 'r', newline='') as f:
             reader = csv.DictReader(f)
             if retry_errors:
-                processed_paths = set(row['original_filepath'] for row in reader if row['status'] == 'ok')
+                processed_paths = set(row.get('original_filepath') for row in reader if row['status'] == 'ok')
             else:
-                processed_paths = set(row['original_filepath'] for row in reader)
+                processed_paths = set(row.get('original_filepath') for row in reader)
+            processed_paths = [ path for path in processed_paths if path ]
     
     with open(output_filename, mode, newline='', encoding='utf-8') as csvfile:
         columns = csv_columns
@@ -251,6 +283,7 @@ def tag_images(filepaths, output_filename, retry_errors=False, verbose=1):
             
             try:
                 row = tag_image(filepath)
+                row['tags'] = ";".join( tag.lower().strip() for tag in row['tags'] )
                 row.update({
                     'timestamp': datetime.now().isoformat(),
                     'status': 'ok'
