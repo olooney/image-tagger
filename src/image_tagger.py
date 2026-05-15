@@ -106,7 +106,7 @@ def clean_filename(filename):
 def fix_extension(current_filename: str, suggested_filename: str) -> str:
     """
     Ensures that the suggested filename has to correct extension, which
-    is something GPT-4o seems to struggle with. Renaming an image file to
+    is something GPT seems to struggle with. Renaming an image file to
     have the wrong extension will create a mismatch between the contents
     and extension, something we want to avoid.
     """
@@ -142,7 +142,7 @@ def resize_image_to_fit(image: Image, max_dimension: int = 512) -> Image:
     regardless of aspect ratio. The returned image will always
     be smaller than 512 along both dimensions but will preserve
     its original aspect ratio. This allows it to consume only
-    one "tile" in the GPT-4o API.
+    one "tile" in the GPT API.
     """
     # read from disk if given as filename
     if isinstance(image, str):
@@ -167,7 +167,7 @@ def resize_image_to_fit(image: Image, max_dimension: int = 512) -> Image:
 
 def base64_encode_image(image: Image) -> str:
     """
-    Encodes a Pillow image as base64 in a format GPT-4o
+    Encodes a Pillow image as base64 in a format GPT
     will accept.
     """
     img_buffer = BytesIO()
@@ -184,14 +184,9 @@ def base64_encode_image(image: Image) -> str:
 #@retry_decorator
 def gpt_vision(url, prompt, response_format=None):
 
-    # { "type": "json_object" }
-    
-    #chat_response = client.chat.completions.create(
     chat_response = client.beta.chat.completions.parse(
-        model="gpt-4o",
+        model="gpt-5.4",
         response_format=response_format,
-        temperature=0.0,
-        max_tokens=1024,
         messages=[
             {
                 "role": "user",
@@ -228,7 +223,7 @@ def tag_image(filepath: str) -> dict:
     base64_image_data = base64_encode_image(image)
     url = f"data:image/jpeg;base64,{base64_image_data}"
 
-    # pass the image to GPT-4o and get JSON back
+    # pass the image to GPT and get JSON back
     prompt = NAME_IMAGE_PROMPT_TEMPLATE.format(filename=filename)
     response = gpt_vision(url, prompt, ImageTagData)
     json_string = response.choices[0].message.content
@@ -259,13 +254,13 @@ def tag_images(filepaths, output_filename, retry_errors=False, verbose=1):
     
     processed_paths = set()
     if file_already_exists:
-        with open(output_filename, 'r', newline='') as f:
+        with open(output_filename, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             if retry_errors:
                 processed_paths = set(row.get('original_filepath') for row in reader if row['status'] == 'ok')
             else:
                 processed_paths = set(row.get('original_filepath') for row in reader)
-            processed_paths = [ path for path in processed_paths if path ]
+            processed_paths = set([ path for path in processed_paths if path ])
     
     with open(output_filename, mode, newline='', encoding='utf-8') as csvfile:
         columns = csv_columns
