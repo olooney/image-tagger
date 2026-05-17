@@ -62,7 +62,7 @@ Sample Gallery
 
 View a sample [Image Tagger Gallery](https://olooney.github.io/image_tagger/gallery/index.html).
 
-Or a newer [Art Gallery](https://olooney.github.io/image_tagger/gallery2/index.html) tagged with GPT-5.4.
+Or a newer [Art Gallery](https://olooney.github.io/image_tagger/gallery3/index.html) tagged with GPT-5.4.
 
 For this sample gallery, I added a "notes" column with manual annotations to
 document where it did notably well or poorly, or where it's behavior is notably
