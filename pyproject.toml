@@ -1,0 +1,20 @@
+[project]
+name = "image-tagger"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "jinja2>=3.1.6",
+    "matplotlib>=3.10.9",
+    "openai>=2.41.0",
+    "pandas>=3.0.3",
+    "pillow>=12.2.0",
+    "pillow-avif-plugin>=1.5.5",
+    "pre-commit>=4.6.0",
+    "pydantic>=2.13.4",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+    "tenacity>=9.1.4",
+    "ty>=0.0.44",
+]
