@@ -1,12 +1,15 @@
 [project]
+
 name = "image-tagger"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Tag, categorize, and clean up images with vision models."
 readme = "README.md"
 requires-python = ">=3.14"
+
 dependencies = [
     "jinja2>=3.1.6",
     "matplotlib>=3.10.9",
+    "ollama>=0.6.2",
     "openai>=2.41.0",
     "pandas>=3.0.3",
     "pillow>=12.2.0",

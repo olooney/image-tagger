@@ -1,6 +1,4 @@
 import os
-import sys
-import math
 import re
 import json
 import base64
@@ -12,20 +10,21 @@ from datetime import datetime
 import traceback
 import random
 import string
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
+from collections.abc import Iterable
 
-import numpy as np
 import pandas as pd
 from PIL import Image
 import requests
 import jinja2
 from pydantic import BaseModel
-from typing import List
+from typing import Any, List
 
-from util import (
-    connect_to_openai,
-    retry_decorator,
-    TemporarySeed
-)
+from util import connect_to_openai, TemporarySeed
+from constants import WELCOME_EXTENSIONS
+
 
 class ImageTagData(BaseModel):
     description: str
@@ -36,70 +35,264 @@ class ImageTagData(BaseModel):
     filename: str
 
 
-
 NAME_IMAGE_PROMPT_TEMPLATE = """Describe this image, come up with a good filename for it,
 and determine category, genre, and tags for the image.
 
-The description should be as detailed as possible. If the main subject is a person,
-describe their appearance and pose.
+## Describe Image
+
+Provide a detailed but concise description in one paragraph of 4-7 sentences.
+Describe only information visible in the image. Avoid speculation.
+If the main subject is a person, describe their appearance and pose.
+
+## Propose Clean Filename
 
 The file extension MUST match the current filename extension.
 If the current filename already adequately describes the image, use the current filename.
-The filename must be less than 40 characters and should be less than 20 characters.
-The filename should omit conjunctions, articles, prepositions, etc. 
+The filename should usually be less than 40 characters and should generally be more than 20 characters.
+The filename MUST always be LESS than 60 characters and MORE than 10 characters.
+The filename should omit conjunctions, articles, prepositions, etc.
 The filename should use only the essential nouns and adjectives.
 The filename must be all lowercase with no spaces or special characters. Use "_" to separate words.
+
+If the image is a book cover, base the filename on the title while respecting the above rules.
+Always omit the leading article ("a", "an", or "the".) Respect all of the above rules.
+
+Examples:
+
+  "secret_garden.png", "child_playing_sunset.jpg", "shark_existential_crisis.gif"
+
+## Filename Already Makes Sense?
 
 Determine if the current filename (given below) already loosely matches the above
 format (don't be too strict) and has a filename that makes sense; report that as the
 boolean flag "filename_already_makes_sense".
 
-The category should be one of "photo", "art", "comic", or "meme". 
-Photographs of sculptures or paintings count as "art".
-A "comic" is any cartoon regardless of humor.
-A "meme" is an image which prominately features text (not merely text in the background.)
-Only one category can be chosen.
+## Assign Category
 
-The genre should be one of "sci-fi", "fantasy", "realism", etc.
-Only one category can be chosen.
+The category should be one of:
+
+    "ai", "art", "books", "comics", "diagrams", "horror",
+    "hygge", "memes", "photography", "speculative", "vintage"
+
+"ai" is for obviously AI-generated imagery.
+
+"art" includes sculptures, paintings, anime/manga
+
+"books" specifically means the image is entirely a book cover. Sometimes
+several book covers will be shown in a collage, or the back cover will
+also be shown. Book covers can be distinguished from other art by presence
+of typographic elements such as title, author, etc.
+
+A "comic" is any illustration with a simple style and embedded text, regardless of humor.
+
+Use "diagrams" for any map, chart, plot, technical diagram, or explanatory diagram.
+
+Use "horror" for the kind of stuff you'd see in a horror movie.
+
+The "hygge" category is for cozy images invoking warmth, autumn, cooking,
+calm spaces such as libraries, desks, or kitchens. These can be illustrations,
+comics, or photographs, and this category takes precedence over any of those
+if it matches the theme.
+
+Use "memes" fon any image which prominently features overlay test and which
+seems to be funny, sad, whimsical, or otherwise non-serious and non-technical.
+
+"photography" is for real photos of real objects.
+
+"speculative" means art with a sci-fi or fantasy theme, often concept art or
+video game art. This category takes precedence over "art", but not over "books".
+
+"vintage" specifically means vintage illustrations or early black-and-white
+photographs.
+
+Only one category can be chosen! You MUST choose one of the categories on this
+list. Use the exact string; for example, NEVER use "meme", "photos", "book",
+or other such variant.
+
+## Assign Genre
+
+The genre should be one of "sci-fi", "fantasy", "comedy", "mystery", "horror",
+"drama", "tragedy", "nonfiction", "nature", or "abstract". Only one genre can
+be chosen. Other genres can be used if non of these fit, but strongly prefer
+this list.
+
+## List Tags
 
 The tags should be a list of relevant topics or themes that may help users
-to find this image while searching.
+to find this image while searching. Feel free to invent any tag that may
+help the user. It is not necessary to use tags that are already adequately
+covered by the category or genre. Never use hashtags!
 
 Current filename: "{filename}"
 """
 
-file_extension_blacklist = ['.mp3', '.mp4', '.pdf', '.docx', '.xlsx', '.csv', '.zip', '.gz', '.txt']
-
 csv_columns = [
-    'timestamp',
-    'status',
-    'total_tokens',
-    'model',
-    'original_filepath',
-    'original_filename',
-    'width',
-    'height',
-    'category',
-    'genre',
-    'filename',
-    'clean_filename',
-    'filename_already_makes_sense',
-    'tags',
-    'description'
+    "timestamp",
+    "status",
+    "total_tokens",
+    "model",
+    "original_filepath",
+    "original_filename",
+    "width",
+    "height",
+    "category",
+    "genre",
+    "filename",
+    "clean_filename",
+    "filename_already_makes_sense",
+    "tags",
+    "description",
 ]
 
-client = connect_to_openai()
+
+class VisionModelProvider(Enum):
+    OPENAI = "openai"
+    GEMMA = "gemma"
 
 
-def clean_filename(filename):
+GEMMA_MODEL = "gemma4:e4b"
+OPENAI_MODEL = "gpt-5.4"
+
+
+@dataclass(frozen=True)
+class VisionTaskResult:
+    content: str
+    model: str
+    total_tokens: int
+
+
+class VisionModelClientAdapter(ABC):
+    provider_name: str
+    model: str
+
+    def __str__(self) -> str:
+        return f"{self.provider_name} ({self.model})"
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(model={self.model!r})"
+
+    @abstractmethod
+    def vision_task(
+        self,
+        image_base64: str,
+        prompt: str,
+        response_format: type[BaseModel],
+    ) -> VisionTaskResult:
+        pass
+
+    @abstractmethod
+    def cleanup(self) -> None:
+        pass
+
+
+class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
+    provider_name = "OpenAI"
+
+    def __init__(self, model: str = OPENAI_MODEL) -> None:
+        self.model = model
+        self.client = connect_to_openai()
+
+    def vision_task(
+        self,
+        image_base64: str,
+        prompt: str,
+        response_format: type[BaseModel],
+    ) -> VisionTaskResult:
+        url = f"data:image/jpeg;base64,{image_base64}"
+        response = self.client.beta.chat.completions.parse(
+            model=self.model,
+            response_format=response_format,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        },
+                    ],
+                },
+            ],
+        )
+        json_string = response.choices[0].message.content
+        if json_string is None:
+            raise ValueError("OpenAI response did not include message content.")
+        total_tokens = response.usage.total_tokens if response.usage is not None else 0
+        return VisionTaskResult(
+            content=json_string,
+            model=response.model,
+            total_tokens=total_tokens,
+        )
+
+    def cleanup(self) -> None:
+        pass
+
+
+class GemmaVisionModelClientAdapter(VisionModelClientAdapter):
+    provider_name = "Gemma"
+
+    def __init__(self, model: str = GEMMA_MODEL) -> None:
+        import ollama
+
+        self.model = model
+        self.client = ollama.Client()
+
+    def vision_task(
+        self,
+        image_base64: str,
+        prompt: str,
+        response_format: type[BaseModel],
+    ) -> VisionTaskResult:
+        response = self.client.chat(
+            model=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_base64],
+                },
+            ],
+            format=response_format.model_json_schema(),
+            options={"temperature": 0},
+        )
+        message = response.get("message", {})
+        return VisionTaskResult(
+            content=message.get("content", ""),
+            model=response.get("model", self.model),
+            total_tokens=response.get("prompt_eval_count", 0)
+            + response.get("eval_count", 0),
+        )
+
+    def cleanup(self) -> None:
+        self.client.generate(model=self.model, prompt="", keep_alive=0)
+
+
+_vision_model_client_adapters: dict[VisionModelProvider, VisionModelClientAdapter] = {}
+
+
+def get_vision_model_client_adapter(
+    provider: VisionModelProvider | str = VisionModelProvider.GEMMA,
+) -> VisionModelClientAdapter:
+    provider = VisionModelProvider(provider)
+    if provider not in _vision_model_client_adapters:
+        if provider == VisionModelProvider.OPENAI:
+            _vision_model_client_adapters[provider] = OpenAIVisionModelClientAdapter()
+        elif provider == VisionModelProvider.GEMMA:
+            _vision_model_client_adapters[provider] = GemmaVisionModelClientAdapter()
+        else:
+            raise ValueError(f"Unsupported vision model provider: {provider.value}")
+    return _vision_model_client_adapters[provider]
+
+
+def clean_filename(filename: str) -> str:
     """Cleans up a filename by removing unloved characters."""
     filename = filename.lower()
-    filename = re.sub(r'^[^a-zA-Z_]+', '', filename) # strip leading whitespace
-    filename = re.sub(r'[\s_-]+', '_', filename) # whitespace to underscore
-    filename = re.sub(r'[^a-zA-Z0-9_.]', '', filename) # strip special characters
-    filename = re.sub(r'[\s_-]*\.+', '.', filename) # whitespace before dot
-    
+    filename = re.sub(r"^[^a-zA-Z_]+", "", filename)  # strip leading whitespace
+    filename = re.sub(r"[\s_-]+", "_", filename)  # whitespace to underscore
+    filename = re.sub(r"[^a-zA-Z0-9_.]", "", filename)  # strip special characters
+    filename = re.sub(r"[\s_-]*\.+", ".", filename)  # whitespace before dot
+
     return filename
 
 
@@ -117,7 +310,7 @@ def fix_extension(current_filename: str, suggested_filename: str) -> str:
     return suggested_filename
 
 
-def path_name_ext(path: str) -> (str, str, str):
+def path_name_ext(path: str) -> tuple[str, str, str]:
     """
     Splits a full path name into a directory, base name,
     and extension, e.g. ("/static/images/", "logo", ".png")
@@ -136,7 +329,9 @@ def scramble(filename: str) -> str:
         return "".join(random.sample(string.ascii_letters, k=8))
 
 
-def resize_image_to_fit(image: Image, max_dimension: int = 512) -> Image:
+def resize_image_to_fit(
+    image: Image.Image | str, max_dimension: int = 512
+) -> Image.Image:
     """
     Resizes the image to always fit within a 512x512 square
     regardless of aspect ratio. The returned image will always
@@ -148,187 +343,216 @@ def resize_image_to_fit(image: Image, max_dimension: int = 512) -> Image:
     if isinstance(image, str):
         image = Image.open(image)
     original_width, original_height = image.size
-    
+
     # Determine which dimension is larger and calculate scaling factor
     if max(original_width, original_height) > max_dimension:
         if original_width > original_height:
             scaling_factor = max_dimension / original_width
         else:
             scaling_factor = max_dimension / original_height
-        
+
         # Calculate new dimensions based on scaling factor
         new_width = int(original_width * scaling_factor)
         new_height = int(original_height * scaling_factor)
-        
+
         # Resize the image to the new dimensions
-        image = image.resize((new_width, new_height), Image.LANCZOS)
+        image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
     return image
 
 
-def base64_encode_image(image: Image) -> str:
+def base64_encode_image(image: Image.Image) -> str:
     """
     Encodes a Pillow image as base64 in a format GPT
     will accept.
     """
     img_buffer = BytesIO()
-    image.save(img_buffer, format='PNG')
+    image.save(img_buffer, format="PNG")
     img_byte_data = img_buffer.getvalue()
-    
+
     # Encode to Base64
     base64_encoded_image = base64.b64encode(img_byte_data)
-    base64_image_data = base64_encoded_image.decode('utf-8')
+    base64_image_data = base64_encoded_image.decode("utf-8")
 
     return base64_image_data
 
 
-#@retry_decorator
-def gpt_vision(url, prompt, response_format=None):
-
-    chat_response = client.beta.chat.completions.parse(
-        model="gpt-5.4",
-        response_format=response_format,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": { "url": url },
-                    },
-                ],
-            },
-        ],
-    )
-    return chat_response
-
-
-def tag_image(filepath: str) -> dict:
+def tag_image(
+    filepath: str, client_adapter: VisionModelClientAdapter
+) -> dict[str, Any]:
     image = None
-    
+
     # handle local or remote images
-    if filepath.startswith('http'):
+    if filepath.startswith("http"):
         url = filepath
-        filename = urlsplit(url).path.split('/')[-1]
+        filename = urlsplit(url).path.split("/")[-1]
         response = requests.get(url)
         image = Image.open(BytesIO(response.content))
         image = resize_image_to_fit(image)
     else:
         dir, filename = os.path.split(filepath)
         image = resize_image_to_fit(filepath)
-        
-    base64_image_data = base64_encode_image(image)
-    url = f"data:image/jpeg;base64,{base64_image_data}"
 
-    # pass the image to GPT and get JSON back
+    base64_image_data = base64_encode_image(image)
+
     prompt = NAME_IMAGE_PROMPT_TEMPLATE.format(filename=filename)
-    response = gpt_vision(url, prompt, ImageTagData)
-    json_string = response.choices[0].message.content
-    data = json.loads(json_string)
+    vision_start_time = time.perf_counter()
+    response = client_adapter.vision_task(base64_image_data, prompt, ImageTagData)
+    vision_duration = time.perf_counter() - vision_start_time
+    data = json.loads(response.content)
 
     # validate the response
-    ImageTagData(**data) 
+    ImageTagData(**data)
 
     # clean up the suggested filename and fix the extension if necessary
-    suggested_filename = clean_filename(data.get('filename', None))
+    suggested_filename = clean_filename(data.get("filename", None))
     suggested_filename_fixed = fix_extension(filename, suggested_filename)
 
     # format the results
-    data['clean_filename'] = suggested_filename_fixed
-    data['original_filepath'] = filepath
-    data['original_filename'] = filename
-    data['total_tokens'] = response.usage.total_tokens
-    data['model'] = response.model
-    data['width'] = image.size[0]
-    data['height'] = image.size[1]
-    
+    data["clean_filename"] = suggested_filename_fixed
+    data["original_filepath"] = filepath
+    data["original_filename"] = filename
+    data["total_tokens"] = response.total_tokens
+    data["model"] = response.model
+    data["width"] = image.size[0]
+    data["height"] = image.size[1]
+    data["vision_duration"] = vision_duration
+
     return data
 
 
-def tag_images(filepaths, output_filename, retry_errors=False, verbose=1):
+def tag_images(
+    filepaths: Iterable[str],
+    output_filename: str | os.PathLike[str],
+    retry_errors: bool = False,
+    verbose: int = 1,
+    provider: VisionModelProvider | str = VisionModelProvider.GEMMA,
+) -> None:
+    client_adapter = get_vision_model_client_adapter(provider)
+    if verbose >= 1:
+        print(f"Using {client_adapter}")
     file_already_exists = os.path.exists(output_filename)
-    mode = 'a' if file_already_exists else 'w'
-    
+    mode = "a" if file_already_exists else "w"
+
     processed_paths = set()
     if file_already_exists:
-        with open(output_filename, 'r', newline='', encoding='utf-8') as f:
+        with open(output_filename, "r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             if retry_errors:
-                processed_paths = set(row.get('original_filepath') for row in reader if row['status'] == 'ok')
+                processed_paths = set(
+                    row.get("original_filepath")
+                    for row in reader
+                    if row["status"] == "ok"
+                )
             else:
-                processed_paths = set(row.get('original_filepath') for row in reader)
-            processed_paths = set([ path for path in processed_paths if path ])
-    
-    with open(output_filename, mode, newline='', encoding='utf-8') as csvfile:
-        columns = csv_columns
-        writer = csv.DictWriter(csvfile, fieldnames=columns)
-        if not file_already_exists:
-            writer.writeheader()
-    
-        for index, filepath in enumerate(filepaths):
-            if any(filepath.lower().endswith(ext) for ext in file_extension_blacklist):
-                continue
-                
-            if filepath in processed_paths:
-                continue
-            processed_paths.add(filepath)
-            
-            try:
-                row = tag_image(filepath)
-                row['tags'] = ";".join( tag.lower().strip() for tag in row['tags'] )
-                row.update({
-                    'timestamp': datetime.now().isoformat(),
-                    'status': 'ok'
-                })
-                writer.writerow(row)
-                csvfile.flush()
-                
-                if verbose == 1:
-                    print('.', end=('\n' if (index + 1) % 100 == 0 else ''))
-                elif verbose > 1:
-                    print(repr(row))
-            except:
-                error_message = traceback.format_exc()
-                
-                if verbose == 1:
-                    print('e', end=('\n' if (index + 1) % 100 == 0 else ''))
-                elif verbose > 1:
-                    print(error_message)
-                
-                writer.writerow({
-                    'timestamp': datetime.now().isoformat(),
-                    'original_filepath': filepath,
-                    'status': 'error',
-                    'description': error_message
-                })
+                processed_paths = set(row.get("original_filepath") for row in reader)
+            processed_paths = set([path for path in processed_paths if path])
+
+    try:
+        with open(output_filename, mode, newline="", encoding="utf-8") as csvfile:
+            columns = csv_columns
+            writer = csv.DictWriter(csvfile, fieldnames=columns)
+            if not file_already_exists:
+                writer.writeheader()
+
+            vision_durations = []
+
+            for index, filepath in enumerate(filepaths):
+                if os.path.splitext(filepath)[1].lower() not in WELCOME_EXTENSIONS:
+                    continue
+
+                if filepath in processed_paths:
+                    continue
+                processed_paths.add(filepath)
+                row_start_time = time.perf_counter()
+
+                try:
+                    row = tag_image(filepath, client_adapter)
+                    duration = row.pop("vision_duration")
+                    vision_durations.append(duration)
+                    row["tags"] = ";".join(tag.lower().strip() for tag in row["tags"])
+                    row.update(
+                        {"timestamp": datetime.now().isoformat(), "status": "ok"}
+                    )
+                    writer.writerow(row)
+                    csvfile.flush()
+
+                    if verbose == 1:
+                        print(".", end=("\n" if (index + 1) % 100 == 0 else ""))
+                    elif verbose == 2:
+                        average_durations = (
+                            vision_durations[1:]
+                            if len(vision_durations) > 2
+                            else vision_durations
+                        )
+                        average_duration = sum(average_durations) / len(
+                            average_durations
+                        )
+                        print(
+                            f"{row['timestamp']} {row['original_filename']} -> "
+                            f"{row['clean_filename']}: {row['category']} {row['genre']} {row['status']} "
+                            f"{duration:0.2f}s avg {average_duration:0.2f}s"
+                        )
+                    elif verbose >= 3:
+                        print(repr(row))
+                except KeyboardInterrupt:
+                    if verbose >= 1:
+                        print("\nInterrupted; cleaning up...")
+                    raise
+                except Exception:
+                    error_message = traceback.format_exc()
+                    duration = time.perf_counter() - row_start_time
+
+                    if verbose == 1:
+                        print("e", end=("\n" if (index + 1) % 100 == 0 else ""))
+                    elif verbose == 2:
+                        original_filename = os.path.basename(filepath)
+                        print(
+                            f"{datetime.now().isoformat()} {original_filename} -> "
+                            f"<none> error {duration:0.2f}s"
+                        )
+                    elif verbose >= 3:
+                        print(error_message)
+
+                    writer.writerow(
+                        {
+                            "timestamp": datetime.now().isoformat(),
+                            "original_filepath": filepath,
+                            "status": "error",
+                            "description": error_message,
+                        }
+                    )
+    finally:
+        client_adapter.cleanup()
 
 
-def find_images(dirs, max_days_old=None):
+def find_images(
+    dirs: str | Iterable[str], max_days_old: float | None = None
+) -> list[str]:
     if max_days_old is None:
-        max_days_old = float('Inf')
+        max_days_old = float("Inf")
 
     if isinstance(dirs, str):
-        dirs = [ dirs ]
-    
+        dirs = [dirs]
+
     current_time = time.time()
-    
+
     filepaths = []
     for dir in dirs:
         # List all files in the directory and filter them
         filepaths += [
-            os.path.join(dir, fn) 
+            os.path.join(dir, fn)
             for fn in os.listdir(dir)
-            if os.path.isfile(os.path.join(dir, fn)) 
-            and (current_time - os.path.getmtime(os.path.join(dir, fn))) < max_days_old*86400
+            if os.path.isfile(os.path.join(dir, fn))
+            and (current_time - os.path.getmtime(os.path.join(dir, fn)))
+            < max_days_old * 86400
         ]
-        
+
     return filepaths
 
 
-def scramble_image_directory(input_dir, output_dir, max_dimension=512):
+def scramble_image_directory(
+    input_dir: str, output_dir: str, max_dimension: int = 512
+) -> None:
     for filepath in find_images(input_dir):
         path, name, ext = path_name_ext(filepath)
         scrambled_name = scramble(name)
@@ -337,33 +561,35 @@ def scramble_image_directory(input_dir, output_dir, max_dimension=512):
         thumbnail.save(new_filepath)
 
 
-def autorename(csv_filename, verbose=1, dry_run=False):
+def autorename(
+    csv_filename: str | os.PathLike[str], verbose: int = 1, dry_run: bool = False
+) -> None:
     metadata_df = pd.read_csv(csv_filename)
     for index, row in metadata_df.iterrows():
-        source = row['original_filepath']
-        
-        if row['status'] != 'ok' or not row['clean_filename']:
+        source = row["original_filepath"]
+
+        if row["status"] != "ok" or not row["clean_filename"]:
             if verbose >= 2:
-                print(f'skipping errored row {index} {source!r}')
+                print(f"skipping errored row {index} {source!r}")
             continue
-    
+
         # old filename
         if not os.path.isfile(source):
             if verbose >= 1:
-                print(f'source file {source!r} is missing!')
+                print(f"source file {source!r} is missing!")
             continue
-    
+
         # new filename
         directory, old_filename = os.path.split(source)
-        new_filename = row['clean_filename']
+        new_filename = row["clean_filename"]
         target = os.path.join(directory, new_filename)
-    
+
         # check for no-op
         if target == source:
             if verbose >= 2:
-                print(f'no rename necessary for {source!r}')
+                print(f"no rename necessary for {source!r}")
             continue
-    
+
         # ensure extension matches
         source_ext = os.path.splitext(source)[1]
         target_base, target_ext = os.path.splitext(target)
@@ -375,7 +601,7 @@ def autorename(csv_filename, verbose=1, dry_run=False):
         # check for name collisions
         if os.path.isfile(target):
             if verbose >= 1:
-                print(f'target {target!r} already exists!')
+                print(f"target {target!r} already exists!")
             suffix = 2
             while True:
                 target = target_base + "_" + str(suffix) + target_ext
@@ -383,44 +609,52 @@ def autorename(csv_filename, verbose=1, dry_run=False):
                     break
                 suffix += 1
             if verbose >= 1:
-                print(f'proceeding with target {target!r}.')
+                print(f"proceeding with target {target!r}.")
             continue
 
         # actually perform the file rename
-        if verbose >=2:
-            print(f'renaming {source!r} to {target!r}...', end='')
+        if verbose >= 2:
+            print(f"renaming {source!r} to {target!r}...", end="")
         try:
             if not dry_run:
                 os.rename(source, target)
             if verbose >= 2:
-                print('success!')
-        except Exception as e:
+                print("success!")
+        except Exception:
             if verbose >= 2:
-                print('error!')
+                print("error!")
             else:
                 print(f"error renaming {source!r} to {target!r}!")
-            traceback.print_exc() 
+            traceback.print_exc()
 
 
-def generate_gallery(csv_filename, output_filename, verbose=1):
+def generate_gallery(
+    csv_filename: str | os.PathLike[str],
+    output_filename: str | os.PathLike[str],
+    verbose: int = 1,
+) -> None:
     # Setup Jinja2 environment
-    file_loader = jinja2.FileSystemLoader('.')
+    template_dir = os.path.dirname(os.path.abspath(__file__))
+    file_loader = jinja2.FileSystemLoader(template_dir)
     env = jinja2.Environment(loader=file_loader)
 
     # read the metadata and prepare for merge
     metadata_df = pd.read_csv(csv_filename)
-    items = metadata_df.to_dict('records')
+    metadata_df = metadata_df[metadata_df["status"] == "ok"]
+    items = metadata_df.to_dict("records")
     for item in items:
-        item['formatted_timestamp'] = datetime.fromisoformat(item['timestamp']).strftime('%m/%d/%y %I:%M %p')
-        item['tags'] = [ tag.strip() for tag in item['tags'].split(';') ]
-        notes = item.get('notes', '')
+        item["formatted_timestamp"] = datetime.fromisoformat(
+            item["timestamp"]
+        ).strftime("%m/%d/%y %I:%M %p")
+        item["tags"] = [tag.strip() for tag in item["tags"].split(";")]
+        notes = item.get("notes", "")
         # filter out the NaNs that pandas uses for missing values.
-        item['notes'] = notes if notes and isinstance(notes, str) else ''
-    
+        item["notes"] = notes if notes and isinstance(notes, str) else ""
+
     # Render the template with the data
-    template = env.get_template('template.html')
+    template = env.get_template("template.html")
     output = template.render(items=items)
-    
+
     # Save the rendered HTML to a file
-    with open(output_filename, 'w', encoding='utf-8') as f:
+    with open(output_filename, "w", encoding="utf-8") as f:
         f.write(output)

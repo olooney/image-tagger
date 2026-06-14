@@ -4,19 +4,7 @@ from pathlib import Path
 from typing import Iterator, Sequence
 from collections import defaultdict
 
-UPLOAD_DIR = Path(r"C:\Users\oloon\Dropbox\images\uploads")
-IMAGE_EXTENSIONS = [
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".bmp",
-    ".tiff",
-    ".webp",
-    ".avif",
-    ".heic",
-]
-UNWELCOME_EXTENSIONS = [".webp", ".avif", ".heic", ".bmp"]
+from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS, UPLOAD_DIR
 
 
 def list_images(directories: str | Path | Sequence[str | Path]) -> Iterator[Path]:

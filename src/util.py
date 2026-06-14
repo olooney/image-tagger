@@ -5,10 +5,16 @@ from collections.abc import Iterable
 import numpy as np
 import yaml
 import random
+import subprocess
+import webbrowser
 from datetime import datetime
 import logging
+from pathlib import Path
+from os import PathLike
 
 logger = logging.getLogger(__name__)
+
+Pathish = PathLike | str
 
 
 def human_join(items: Iterable, conjunction="and"):
@@ -30,6 +36,17 @@ def now(with_time: bool = True) -> str:
     if with_time:
         format += " %H:%M"
     return current_datetime.strftime(format)
+
+
+def preview(html_path: Pathish):
+    html_uri = Path(html_path).resolve().as_uri()
+    try:
+        subprocess.run(
+            ["code", "--reuse-window", "--open-url", html_uri],
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        webbrowser.open(html_uri)
 
 
 class TemporarySeed:
@@ -56,8 +73,8 @@ class TemporarySeed:
 class Config:
     def __init__(self, values=None):
         if values:
-            for key, value in data.items():
-                setattr(credentials, key, value)
+            for key, value in values.items():
+                setattr(self, key, value)
 
     @classmethod
     def load(cls, filename):
@@ -123,7 +140,7 @@ def connect_to_openai():
     openai_credentials_filename = os.path.join(
         os.path.expanduser("~"), ".openai", "credentials.yaml"
     )
-    openai_credentials = Credentials.load(openai_credentials_filename)
+    Credentials.load(openai_credentials_filename)
     client = openai.OpenAI()
     return client
 
