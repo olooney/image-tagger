@@ -22,7 +22,7 @@ import jinja2
 from pydantic import BaseModel
 from typing import Any, List
 
-from util import connect_to_openai, TemporarySeed
+from util import connect_to_openai, TemporarySeed, Pathish
 from constants import WELCOME_EXTENSIONS
 
 
@@ -148,10 +148,12 @@ csv_columns = [
 class VisionModelProvider(Enum):
     OPENAI = "openai"
     GEMMA = "gemma"
+    QWEN = "qwen"
 
 
 GEMMA_MODEL = "gemma4:e4b"
 OPENAI_MODEL = "gpt-5.4"
+QWEN_MODEL = "qwen3.5:4b"
 
 
 @dataclass(frozen=True)
@@ -198,7 +200,7 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
-        url = f"data:image/jpeg;base64,{image_base64}"
+        url = f"data:image/png;base64,{image_base64}"
         response = self.client.beta.chat.completions.parse(
             model=self.model,
             response_format=response_format,
@@ -229,10 +231,10 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
         pass
 
 
-class GemmaVisionModelClientAdapter(VisionModelClientAdapter):
-    provider_name = "Gemma"
+class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
+    provider_name = "Ollama"
 
-    def __init__(self, model: str = GEMMA_MODEL) -> None:
+    def __init__(self, model: str) -> None:
         import ollama
 
         self.model = model
@@ -254,7 +256,11 @@ class GemmaVisionModelClientAdapter(VisionModelClientAdapter):
                 },
             ],
             format=response_format.model_json_schema(),
-            options={"temperature": 0},
+            options={
+                "temperature": 0,
+                "image_min_tokens": 1120,
+                "image_max_tokens": 1120,
+            },
         )
         message = response.get("message", {})
         return VisionTaskResult(
@@ -272,14 +278,20 @@ _vision_model_client_adapters: dict[VisionModelProvider, VisionModelClientAdapte
 
 
 def get_vision_model_client_adapter(
-    provider: VisionModelProvider | str = VisionModelProvider.GEMMA,
+    provider: VisionModelProvider,
 ) -> VisionModelClientAdapter:
     provider = VisionModelProvider(provider)
     if provider not in _vision_model_client_adapters:
         if provider == VisionModelProvider.OPENAI:
             _vision_model_client_adapters[provider] = OpenAIVisionModelClientAdapter()
         elif provider == VisionModelProvider.GEMMA:
-            _vision_model_client_adapters[provider] = GemmaVisionModelClientAdapter()
+            _vision_model_client_adapters[provider] = OllamaVisionModelClientAdapter(
+                GEMMA_MODEL
+            )
+        elif provider == VisionModelProvider.QWEN:
+            _vision_model_client_adapters[provider] = OllamaVisionModelClientAdapter(
+                QWEN_MODEL
+            )
         else:
             raise ValueError(f"Unsupported vision model provider: {provider.value}")
     return _vision_model_client_adapters[provider]
@@ -360,27 +372,27 @@ def resize_image_to_fit(
     return image
 
 
-def base64_encode_image(image: Image.Image) -> str:
+def base64_encode_image(image: Image.Image | Pathish) -> str:
     """
     Encodes a Pillow image as base64 in a format GPT
     will accept.
     """
-    img_buffer = BytesIO()
-    image.save(img_buffer, format="PNG")
-    img_byte_data = img_buffer.getvalue()
 
-    # Encode to Base64
-    base64_encoded_image = base64.b64encode(img_byte_data)
-    base64_image_data = base64_encoded_image.decode("utf-8")
+    if isinstance(image, Pathish):
+        image = Image.open(image)
 
-    return base64_image_data
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    byte_data = buffer.getvalue()
+    base64_encoded_bytes = base64.b64encode(byte_data)
+
+    return base64_encoded_bytes.decode("utf-8")
 
 
 def tag_image(
-    filepath: str, client_adapter: VisionModelClientAdapter
+    filepath: str,
+    client_adapter: VisionModelClientAdapter,
 ) -> dict[str, Any]:
-    image = None
-
     # handle local or remote images
     if filepath.startswith("http"):
         url = filepath
@@ -389,7 +401,7 @@ def tag_image(
         image = Image.open(BytesIO(response.content))
         image = resize_image_to_fit(image)
     else:
-        dir, filename = os.path.split(filepath)
+        _, filename = os.path.split(filepath)
         image = resize_image_to_fit(filepath)
 
     base64_image_data = base64_encode_image(image)
@@ -425,7 +437,7 @@ def tag_images(
     output_filename: str | os.PathLike[str],
     retry_errors: bool = False,
     verbose: int = 1,
-    provider: VisionModelProvider | str = VisionModelProvider.GEMMA,
+    provider: VisionModelProvider = VisionModelProvider.OPENAI,
 ) -> None:
     client_adapter = get_vision_model_client_adapter(provider)
     if verbose >= 1:

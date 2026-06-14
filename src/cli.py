@@ -109,7 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
         "tag", help="Tag upload images with a vision model."
     )
     add_common_upload_args(tag_parser)
-    tag_parser.add_argument("--provider", choices=["openai", "gemma"], default="gemma")
+    tag_parser.add_argument(
+        "--provider", choices=["openai", "gemma", "qwen"], default="openai"
+    )
     tag_parser.add_argument("--retry-errors", action="store_true")
     tag_parser.set_defaults(func=tag_uploads)
 
