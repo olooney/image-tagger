@@ -170,6 +170,59 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert not (uploads_dir / "art.png").exists()
 
 
+def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
+    metadata_filename = tmp_path / "image_metadata.csv"
+    gallery_filename = tmp_path / "index.html"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=[*it.csv_columns, "notes"])
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "model": "mock-vision",
+                "original_filepath": str(tmp_path / "books.jpg"),
+                "original_filename": "books.jpg",
+                "width": "20",
+                "height": "20",
+                "category": "books",
+                "genre": "mock",
+                "filename": "books_books.jpg",
+                "clean_filename": "books_books.jpg",
+                "filename_already_makes_sense": "False",
+                "tags": "books;mock;library",
+                "description": "Mock description for books.jpg.",
+                "notes": "Keep this one.",
+            }
+        )
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:21:57.966360",
+                "status": "error",
+                "original_filename": "error.jpg",
+                "clean_filename": "error.jpg",
+                "description": "This row should not render.",
+            }
+        )
+
+    it.generate_gallery(metadata_filename, gallery_filename)
+
+    html = gallery_filename.read_text(encoding="utf-8")
+    assert html.startswith("<!DOCTYPE html>")
+    assert "<title>Image Gallery</title>" in html
+    assert 'id="searchInput"' in html
+    assert html.count('class="gallery-image row mb-4"') == 1
+    assert '<img src="books_books.jpg" alt="Image" class="img-fluid">' in html
+    assert "06/15/26 05:20 PM" in html
+    assert "<strong>Category:</strong> books" in html
+    assert "<strong>Genre:</strong> mock" in html
+    assert '<li class="tag-pill">library</li>' in html
+    assert "Mock description for books.jpg." in html
+    assert "Keep this one." in html
+    assert "This row should not render." not in html
+
+
 @pytest.mark.parametrize(
     ("verbosity_args", "expected"),
     [

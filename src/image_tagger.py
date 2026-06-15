@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from collections.abc import Iterable
+from importlib import resources
 
 import pandas as pd
 from PIL import Image
@@ -742,11 +743,6 @@ def generate_gallery(
     output_filename: str | os.PathLike[str],
     verbose: int = 1,
 ) -> None:
-    # Setup Jinja2 environment
-    template_dir = os.path.dirname(os.path.abspath(__file__))
-    file_loader = jinja2.FileSystemLoader(template_dir)
-    env = jinja2.Environment(loader=file_loader)
-
     # read the metadata and prepare for merge
     metadata_df = pd.read_csv(csv_filename)
     metadata_df = metadata_df[metadata_df["status"] == "ok"]
@@ -761,7 +757,10 @@ def generate_gallery(
         item["notes"] = notes if notes and isinstance(notes, str) else ""
 
     # Render the template with the data
-    template = env.get_template("template.html")
+    template_text = (
+        resources.files("image_tagger_data").joinpath("template.html").read_text()
+    )
+    template = jinja2.Template(template_text)
     output = template.render(items=items)
 
     # Save the rendered HTML to a file
