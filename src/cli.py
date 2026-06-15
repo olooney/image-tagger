@@ -1,12 +1,14 @@
 import argparse
+import re
 from pathlib import Path
 
 import image_tagger as it
-from constants import GALLERY_NAME, METADATA_FILENAME, UPLOAD_DIR
+from constants import GALLERY_NAME, METADATA_FILENAME, UPLOAD_DIR, WELCOME_EXTENSIONS
 from convert_uploads import (
     convert_images,
     count_files_by_extension,
     delete_duplicate_images,
+    format_extension_counts,
     normalize_image_extensions,
     rename_jpeg_to_jpg,
 )
@@ -17,18 +19,34 @@ def path_arg(value: str) -> Path:
     return Path(value)
 
 
+def extensions_arg(value: str) -> list[str]:
+    extensions = []
+    for extension in re.split(r"[\s,;]+", value.strip()):
+        if not extension:
+            continue
+        extension = extension.lower()
+        if not extension.startswith("."):
+            extension = f".{extension}"
+        extensions.append(extension)
+    return extensions
+
+
 def convert_uploads(args: argparse.Namespace) -> None:
     directory = args.directory
     convert_images(str(directory), dry_run=args.dry_run)
     delete_duplicate_images(str(directory), dry_run=args.dry_run)
     normalize_image_extensions(directory, dry_run=args.dry_run)
     rename_jpeg_to_jpg(directory, dry_run=args.dry_run)
-    print(count_files_by_extension(directory))
+    print(format_extension_counts(count_files_by_extension(directory)))
 
 
 def tag_uploads(args: argparse.Namespace) -> None:
-    filepaths = it.find_images(str(args.directory))
-    print("number of image files:", len(filepaths))
+    filepaths = it.find_images(
+        str(args.directory),
+        metadata_filename=args.metadata_filename,
+        extension_filter=args.extensions,
+    )
+    print("number of image files to tag:", len(filepaths))
     it.tag_images(
         filepaths,
         args.metadata_filename,
@@ -39,7 +57,15 @@ def tag_uploads(args: argparse.Namespace) -> None:
 
 
 def rename_uploads(args: argparse.Namespace) -> None:
-    it.autorename(
+    it.rename_images(
+        args.metadata_filename,
+        verbose=args.verbose,
+        dry_run=args.dry_run,
+    )
+
+
+def shelve_uploads(args: argparse.Namespace) -> None:
+    it.shelve_images(
         args.metadata_filename,
         verbose=args.verbose,
         dry_run=args.dry_run,
@@ -89,10 +115,30 @@ def clean_uploads(args: argparse.Namespace) -> None:
 
 
 def add_common_upload_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--directory", type=path_arg, default=UPLOAD_DIR)
-    parser.add_argument("--metadata-filename", type=path_arg, default=METADATA_FILENAME)
-    parser.add_argument("--verbose", type=int, default=2)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("directory", nargs="?", type=path_arg, default=UPLOAD_DIR)
+    parser.add_argument("--metadata-filename", type=path_arg)
+    parser.set_defaults(verbose=1)
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        dest="verbose_delta",
+        help="Increase verbosity. Repeat for more output.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="count",
+        default=0,
+        dest="quiet_delta",
+        help="Decrease verbosity. Repeat for less output.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="simulate running the command without taking actions.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,6 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
     tag_parser.add_argument(
         "--provider", choices=["openai", "gemma", "qwen"], default="openai"
     )
+    tag_parser.add_argument(
+        "--extensions", type=extensions_arg, default=WELCOME_EXTENSIONS
+    )
     tag_parser.add_argument("--retry-errors", action="store_true")
     tag_parser.set_defaults(func=tag_uploads)
 
@@ -120,6 +169,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_upload_args(rename_parser)
     rename_parser.set_defaults(func=rename_uploads)
+
+    shelve_parser = subparsers.add_parser(
+        "shelve", help="Move uploads into sibling category directories."
+    )
+    add_common_upload_args(shelve_parser)
+    shelve_parser.set_defaults(func=shelve_uploads)
 
     scramble_parser = subparsers.add_parser(
         "scramble", help="Randomize upload filename stems in place."
@@ -152,6 +207,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.metadata_filename is None:
+        args.metadata_filename = args.directory / METADATA_FILENAME.name
+    args.verbose += args.verbose_delta - args.quiet_delta
     args.func(args)
 
 

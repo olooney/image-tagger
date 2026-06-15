@@ -5,24 +5,29 @@ python := if os() == "windows" { "./.venv/Scripts/python.exe" } else { "./.venv/
 default:
     just --list
 
-convert:
-    {{python}} src/cli.py convert
+convert *args:
+    {{python}} src/cli.py convert {{args}}
 
-tag:
-    {{python}} src/cli.py tag
+tag *args:
+    {{python}} src/cli.py tag {{args}}
 
-rename:
-    {{python}} src/cli.py rename
+rename *args:
+    {{python}} src/cli.py rename {{args}}
 
-scramble:
-    {{python}} src/cli.py scramble
+shelve *args:
+    {{python}} src/cli.py shelve {{args}}
 
-gallery:
-    {{python}} src/cli.py gallery
-
-clean:
-    {{python}} src/cli.py clean
+gallery *args:
+    {{python}} src/cli.py gallery {{args}}
 
 run: convert tag rename gallery
+
+# test tasks
+
+scramble *args:
+    {{python}} src/cli.py scramble {{args}}
+
+clean *args:
+    {{python}} src/cli.py clean {{args}}
 
 test: clean scramble run

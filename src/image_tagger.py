@@ -445,20 +445,6 @@ def tag_images(
     file_already_exists = os.path.exists(output_filename)
     mode = "a" if file_already_exists else "w"
 
-    processed_paths = set()
-    if file_already_exists:
-        with open(output_filename, "r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            if retry_errors:
-                processed_paths = set(
-                    row.get("original_filepath")
-                    for row in reader
-                    if row["status"] == "ok"
-                )
-            else:
-                processed_paths = set(row.get("original_filepath") for row in reader)
-            processed_paths = set([path for path in processed_paths if path])
-
     try:
         with open(output_filename, mode, newline="", encoding="utf-8") as csvfile:
             columns = csv_columns
@@ -469,12 +455,6 @@ def tag_images(
             vision_durations = []
 
             for index, filepath in enumerate(filepaths):
-                if os.path.splitext(filepath)[1].lower() not in WELCOME_EXTENSIONS:
-                    continue
-
-                if filepath in processed_paths:
-                    continue
-                processed_paths.add(filepath)
                 row_start_time = time.perf_counter()
 
                 try:
@@ -488,9 +468,9 @@ def tag_images(
                     writer.writerow(row)
                     csvfile.flush()
 
-                    if verbose == 1:
+                    if verbose == 0:
                         print(".", end=("\n" if (index + 1) % 100 == 0 else ""))
-                    elif verbose == 2:
+                    elif verbose == 1:
                         average_durations = (
                             vision_durations[1:]
                             if len(vision_durations) > 2
@@ -537,8 +517,31 @@ def tag_images(
         client_adapter.cleanup()
 
 
+def previously_tagged_filenames(metadata_filename: str | os.PathLike[str]) -> set[str]:
+    if not os.path.exists(metadata_filename):
+        return set()
+
+    tagged_filenames = set()
+    with open(metadata_filename, "r", newline="", encoding="utf-8") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            if row.get("status") != "ok":
+                continue
+
+            for column in ["original_filename", "clean_filename"]:
+                value = row.get(column)
+                if not value:
+                    continue
+                tagged_filenames.add(os.path.basename(value))
+
+    return tagged_filenames
+
+
 def find_images(
-    dirs: str | Iterable[str], max_days_old: float | None = None
+    dirs: str | Iterable[str],
+    max_days_old: float | None = None,
+    metadata_filename: str | os.PathLike[str] | None = None,
+    extension_filter: Iterable[str] | None = WELCOME_EXTENSIONS,
 ) -> list[str]:
     if max_days_old is None:
         max_days_old = float("Inf")
@@ -546,24 +549,41 @@ def find_images(
     if isinstance(dirs, str):
         dirs = [dirs]
 
+    tagged_filenames = (
+        previously_tagged_filenames(metadata_filename)
+        if metadata_filename is not None
+        else set()
+    )
+    allowed_extensions = (
+        {extension.lower() for extension in extension_filter}
+        if extension_filter is not None
+        else None
+    )
     current_time = time.time()
 
     filepaths = []
     for dir in dirs:
-        # List all files in the directory and filter them
-        filepaths += [
-            os.path.join(dir, fn)
-            for fn in os.listdir(dir)
-            if os.path.isfile(os.path.join(dir, fn))
-            and (current_time - os.path.getmtime(os.path.join(dir, fn)))
-            < max_days_old * 86400
-        ]
+        for filename in os.listdir(dir):
+            filepath = os.path.join(dir, filename)
+            if not os.path.isfile(filepath):
+                continue
+            if (current_time - os.path.getmtime(filepath)) >= max_days_old * 86400:
+                continue
+            if allowed_extensions is not None:
+                extension = os.path.splitext(filepath)[1].lower()
+                if extension not in allowed_extensions:
+                    continue
+            if filename in tagged_filenames:
+                continue
+            filepaths.append(filepath)
 
     return filepaths
 
 
 def scramble_image_directory(
-    input_dir: str, output_dir: str, max_dimension: int = 512
+    input_dir: str,
+    output_dir: str,
+    max_dimension: int = 512,
 ) -> None:
     for filepath in find_images(input_dir):
         path, name, ext = path_name_ext(filepath)
@@ -573,8 +593,10 @@ def scramble_image_directory(
         thumbnail.save(new_filepath)
 
 
-def autorename(
-    csv_filename: str | os.PathLike[str], verbose: int = 1, dry_run: bool = False
+def rename_images(
+    csv_filename: str | os.PathLike[str],
+    verbose: int = 1,
+    dry_run: bool = False,
 ) -> None:
     metadata_df = pd.read_csv(csv_filename)
     for index, row in metadata_df.iterrows():
@@ -585,16 +607,18 @@ def autorename(
                 print(f"skipping errored row {index} {source!r}")
             continue
 
-        # old filename
-        if not os.path.isfile(source):
-            if verbose >= 1:
-                print(f"source file {source!r} is missing!")
-            continue
-
         # new filename
         directory, old_filename = os.path.split(source)
         new_filename = row["clean_filename"]
         target = os.path.join(directory, new_filename)
+
+        # old filename
+        if not os.path.isfile(source):
+            if verbose >= 2:
+                print(f"source file {source!r} is missing!")
+            if verbose >= 1 and not os.path.isfile(target):
+                print(f"both source file {source!r} and {target!r} are missing!")
+            continue
 
         # check for no-op
         if target == source:
@@ -607,7 +631,9 @@ def autorename(
         target_base, target_ext = os.path.splitext(target)
         if source_ext.lower() != target_ext.lower():
             if verbose >= 1:
-                print(f"Mismatched file extensions between {source!r} and {target!r}!")
+                print(
+                    f"Mismatched file extensions between {source!r} and {target!r}; skipping rename!"
+                )
             continue
 
         # check for name collisions
@@ -625,18 +651,89 @@ def autorename(
             continue
 
         # actually perform the file rename
-        if verbose >= 2:
+        if verbose >= 1:
             print(f"renaming {source!r} to {target!r}...", end="")
         try:
             if not dry_run:
                 os.rename(source, target)
-            if verbose >= 2:
+            if verbose >= 1:
                 print("success!")
         except Exception:
-            if verbose >= 2:
+            if verbose >= 1:
                 print("error!")
             else:
                 print(f"error renaming {source!r} to {target!r}!")
+            traceback.print_exc()
+
+
+def shelve_images(
+    csv_filename: str | os.PathLike[str],
+    verbose: int = 1,
+    dry_run: bool = False,
+) -> None:
+    metadata_df = pd.read_csv(csv_filename)
+    for index, row in metadata_df.iterrows():
+        original_source = row["original_filepath"]
+
+        if row["status"] != "ok" or not row["category"]:
+            if verbose >= 2:
+                print(f"skipping row {index} {original_source!r}")
+            continue
+
+        source_directory = os.path.dirname(original_source)
+        source_filename = row["clean_filename"] or row["original_filename"]
+        source = os.path.join(source_directory, source_filename)
+        if not os.path.isfile(source):
+            source = original_source
+
+        if not os.path.isfile(source):
+            if verbose >= 1:
+                print(f"source file {source!r} is missing!")
+            continue
+
+        category = str(row["category"]).strip()
+        target_directory = os.path.normpath(
+            os.path.join(source_directory, os.pardir, category)
+        )
+        if not os.path.isdir(target_directory):
+            if verbose >= 1:
+                print(
+                    f"target directory {target_directory!r} is missing; skipping {source!r}"
+                )
+            continue
+
+        target = os.path.join(target_directory, os.path.basename(source))
+
+        if target == source:
+            if verbose >= 2:
+                print(f"no move necessary for {source!r}")
+            continue
+
+        target_base, target_ext = os.path.splitext(target)
+        if os.path.isfile(target):
+            if verbose >= 1:
+                print(f"target {target!r} already exists!")
+            suffix = 2
+            while True:
+                target = target_base + "_" + str(suffix) + target_ext
+                if not os.path.isfile(target):
+                    break
+                suffix += 1
+            if verbose >= 1:
+                print(f"proceeding with target {target!r}.")
+
+        if verbose >= 1:
+            print(f"moving {source!r} to {target!r}...", end="")
+        try:
+            if not dry_run:
+                os.rename(source, target)
+            if verbose >= 1:
+                print("success!")
+        except Exception:
+            if verbose >= 1:
+                print("error!")
+            else:
+                print(f"error moving {source!r} to {target!r}!")
             traceback.print_exc()
 
 

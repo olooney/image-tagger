@@ -113,7 +113,15 @@ def count_files_by_extension(directory):
         # Increment count of this extension
         extension_counts[extension] += 1
 
-    return extension_counts
+    return dict(sorted(extension_counts.items()))
+
+
+def format_extension_counts(extension_counts):
+    if not extension_counts:
+        return "no image files found"
+    return "\n".join(
+        f"{extension}: {count}" for extension, count in extension_counts.items()
+    )
 
 
 def rename_jpeg_to_jpg(directory, dry_run=False):
@@ -134,7 +142,7 @@ def main(directory: Path, dry_run=False):
     delete_duplicate_images(directory_string, dry_run=dry_run)
     normalize_image_extensions(directory, dry_run=dry_run)
     rename_jpeg_to_jpg(directory, dry_run=dry_run)
-    print(count_files_by_extension(directory))
+    print(format_extension_counts(count_files_by_extension(directory)))
 
 
 if __name__ == "__main__":
