@@ -1,10 +1,14 @@
 import os
 from PIL import Image
+from pillow_heif import register_heif_opener
 from pathlib import Path
 from typing import Iterator, Sequence
 from collections import defaultdict
 
 from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS, UPLOAD_DIR
+
+
+register_heif_opener()
 
 
 def list_images(directories: str | Path | Sequence[str | Path]) -> Iterator[Path]:

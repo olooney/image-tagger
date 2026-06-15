@@ -78,7 +78,6 @@ class Config:
 
     @classmethod
     def load(cls, filename):
-        global data
         with open(filename, "r") as file:
             data = yaml.safe_load(file)
 

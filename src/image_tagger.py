@@ -378,8 +378,8 @@ def base64_encode_image(image: Image.Image | Pathish) -> str:
     will accept.
     """
 
-    if isinstance(image, Pathish):
-        image = Image.open(image)
+    if not isinstance(image, Image.Image):
+        image = Image.open(os.fspath(image))
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -484,7 +484,7 @@ def tag_images(
                             f"{row['clean_filename']}: {row['category']} {row['genre']} {row['status']} "
                             f"{duration:0.2f}s avg {average_duration:0.2f}s"
                         )
-                    elif verbose >= 3:
+                    elif verbose >= 2:
                         print(repr(row))
                 except KeyboardInterrupt:
                     if verbose >= 1:

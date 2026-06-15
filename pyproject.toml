@@ -14,10 +14,15 @@ dependencies = [
     "pandas>=3.0.3",
     "pillow>=12.2.0",
     "pillow-avif-plugin>=1.5.5",
+    "pillow-heif>=1.1.1",
     "pre-commit>=4.6.0",
+    "pytest>=9.0.2",
     "pydantic>=2.13.4",
     "pyyaml>=6.0.3",
     "requests>=2.34.2",
     "tenacity>=9.1.4",
     "ty>=0.0.44",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
