@@ -181,6 +181,7 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
                 "timestamp": "2026-06-15T17:20:57.966360",
                 "status": "ok",
                 "total_tokens": "42",
+                "provider_name": "Mock",
                 "model": "mock-vision",
                 "original_filepath": str(tmp_path / "books.jpg"),
                 "original_filename": "books.jpg",
@@ -211,6 +212,7 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     html = gallery_filename.read_text(encoding="utf-8")
     assert html.startswith("<!DOCTYPE html>")
     assert "<title>Image Gallery</title>" in html
+    assert "Mock (mock-vision) Image Annotation" in html
     assert 'id="searchInput"' in html
     assert html.count('class="gallery-image row mb-4"') == 1
     assert '<img src="books_books.jpg" alt="Image" class="img-fluid">' in html

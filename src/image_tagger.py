@@ -131,6 +131,7 @@ csv_columns = [
     "timestamp",
     "status",
     "total_tokens",
+    "provider_name",
     "model",
     "original_filepath",
     "original_filename",
@@ -425,6 +426,7 @@ def tag_image(
     data["original_filepath"] = filepath
     data["original_filename"] = filename
     data["total_tokens"] = response.total_tokens
+    data["provider_name"] = client_adapter.provider_name
     data["model"] = response.model
     data["width"] = image.size[0]
     data["height"] = image.size[1]
@@ -747,6 +749,9 @@ def generate_gallery(
     metadata_df = pd.read_csv(csv_filename)
     metadata_df = metadata_df[metadata_df["status"] == "ok"]
     items = metadata_df.to_dict("records")
+    first_item = items[0] if items else {}
+    provider_name = str(first_item.get("provider_name", "")).strip()
+    model = str(first_item.get("model", "")).strip()
     for item in items:
         item["formatted_timestamp"] = datetime.fromisoformat(
             item["timestamp"]
@@ -761,7 +766,7 @@ def generate_gallery(
         resources.files("image_tagger_data").joinpath("template.html").read_text()
     )
     template = jinja2.Template(template_text)
-    output = template.render(items=items)
+    output = template.render(items=items, provider_name=provider_name, model=model)
 
     # Save the rendered HTML to a file
     with open(output_filename, "w", encoding="utf-8") as f:
