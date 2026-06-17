@@ -49,6 +49,21 @@ def preview(html_path: Pathish):
         webbrowser.open(html_uri)
 
 
+def make_unique(path: Pathish) -> str:
+    path = os.fspath(path)
+    if not os.path.exists(path):
+        return path
+
+    path_base, path_ext = os.path.splitext(path)
+    separator = "_" if path_base[-1:].isdigit() else ""
+    for suffix in range(2, 10):
+        candidate = f"{path_base}{separator}{suffix}{path_ext}"
+        if not os.path.exists(candidate):
+            return candidate
+
+    raise FileExistsError(f"No available filename from {path!r} through suffix 9.")
+
+
 class TemporarySeed:
     """Context manager that temporarily seeds python's
     internal random number generator to a specific value,

@@ -15,7 +15,7 @@ IMAGE_EXTENSIONS = [
     ".avif",
     ".heic",
 ]
-UNWELCOME_EXTENSIONS = [".webp", ".avif", ".heic", ".bmp"]
+UNWELCOME_EXTENSIONS = [".webp", ".avif", ".heic", ".bmp", ".gif"]
 WELCOME_EXTENSIONS = [
     extension for extension in IMAGE_EXTENSIONS if extension not in UNWELCOME_EXTENSIONS
 ]

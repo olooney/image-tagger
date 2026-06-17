@@ -6,6 +6,7 @@ from typing import Iterator, Sequence
 from collections import defaultdict
 
 from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS, UPLOAD_DIR
+from util import make_unique
 
 
 register_heif_opener()
@@ -66,6 +67,7 @@ def convert_images(
         if extension.lower() in input_extensions:
             # map the filename
             output_filename = os.path.join(directory, base_name + output_extension)
+            output_filename = make_unique(output_filename)
 
             # convert the image
             if not dry_run:

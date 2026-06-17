@@ -12,6 +12,7 @@ from pydantic import BaseModel
 import cli
 import image_tagger as it
 from constants import WELCOME_EXTENSIONS
+from util import make_unique
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,32 @@ CATEGORIES = [
 ]
 
 
+TEST_CLEAN_FILENAMES = {
+    "art.png": "picasso.png",
+    "books.jpg": "library_book.jpg",
+    "books_cover.jpg": "library_book.jpg",
+    "comics.jpg": "garfield.jpg",
+    "comics2.jpg": "garfield2.jpg",
+    "diagrams.jpg": "flowchart.jpg",
+    "horror.jpg": "haunted_house.jpg",
+    "memes.jpg": "office_meme.jpg",
+    "photography.jpg": "city_street.jpg",
+}
+
+
+TEST_CATEGORIES = {
+    "art.png": "art",
+    "books.jpg": "books",
+    "books_cover.jpg": "books",
+    "comics.jpg": "comics",
+    "comics2.jpg": "comics",
+    "diagrams.jpg": "diagrams",
+    "horror.jpg": "horror",
+    "memes.jpg": "memes",
+    "photography.jpg": "photography",
+}
+
+
 class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
     provider_name = "Mock"
     model = "mock-vision"
@@ -45,13 +72,9 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
         filename = prompt.rsplit('Current filename: "', maxsplit=1)[1].split(
             '"', maxsplit=1
         )[0]
-        stem = Path(filename).stem
-        extension = Path(filename).suffix.lower()
-        category = stem.split("_", maxsplit=1)[0]
-        filename_already_makes_sense = filename == "art.png"
-        clean_filename = (
-            filename if filename_already_makes_sense else f"{stem}_{stem}{extension}"
-        )
+        category = TEST_CATEGORIES[filename]
+        clean_filename = TEST_CLEAN_FILENAMES[filename]
+        filename_already_makes_sense = clean_filename == filename
         content = json.dumps(
             {
                 "description": f"Mock description for {filename}.",
@@ -74,6 +97,7 @@ def workflow_workspace(tmp_path: Path) -> dict[str, Path]:
     uploads_dir.mkdir()
     for category in CATEGORIES:
         (tmp_path / category).mkdir()
+    (tmp_path / "art" / "picasso.png").touch()
 
     for image_path in (REPO_ROOT / "tests" / "images").iterdir():
         shutil.copy2(image_path, uploads_dir / image_path.name)
@@ -120,10 +144,14 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
 
     convert_stdout = run_cli("convert", str(uploads_dir))
     assert "Converted" in convert_stdout
-    assert convert_stdout.endswith(".gif: 1\n.jpg: 5\n.png: 1\n")
+    assert "comics.bmp" in convert_stdout
+    assert "comics2.jpg" in convert_stdout
+    assert convert_stdout.endswith(".jpg: 8\n.png: 1\n")
     assert sorted(
         path.suffix.lower() for path in uploads_dir.iterdir() if path.is_file()
-    ) == [".gif", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".png"]
+    ) == [".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".png"]
+    assert (uploads_dir / "comics.jpg").exists()
+    assert (uploads_dir / "comics2.jpg").exists()
     assert all(
         path.suffix.lower() in WELCOME_EXTENSIONS
         for path in uploads_dir.iterdir()
@@ -131,22 +159,23 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     )
 
     tag_stdout = run_tag(uploads_dir, "-q")
-    assert tag_stdout == "number of image files to tag: 7\n......."
+    assert tag_stdout == "number of image files to tag: 9\n........."
 
     with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
         rows = list(csv.DictReader(metadata_file))
-    assert len(rows) == 7
+    assert len(rows) == 9
     assert {row["status"] for row in rows} == {"ok"}
     clean_filenames = {row["original_filename"]: row["clean_filename"] for row in rows}
-    assert clean_filenames["art.png"] == "art.png"
-    assert clean_filenames["books.jpg"] == "books_books.jpg"
+    assert clean_filenames == TEST_CLEAN_FILENAMES
 
     rename_stdout = run_cli("rename", str(uploads_dir))
     assert "renaming" in rename_stdout
     assert "success!" in rename_stdout
-    assert (uploads_dir / "art.png").exists()
-    assert (uploads_dir / "books_books.jpg").exists()
-    assert (uploads_dir / "comics_comics.jpg").exists()
+    assert (uploads_dir / "picasso.png").exists()
+    assert (uploads_dir / "library_book.jpg").exists()
+    assert (uploads_dir / "library_book2.jpg").exists()
+    assert (uploads_dir / "garfield.jpg").exists()
+    assert (uploads_dir / "garfield2.jpg").exists()
 
     gallery_stdout = run_cli(
         "gallery",
@@ -164,10 +193,13 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     shelve_stdout = run_cli("shelve", str(uploads_dir))
     assert "moving" in shelve_stdout
     assert "success!" in shelve_stdout
-    assert (workflow_workspace["root"] / "art" / "art.png").exists()
-    assert (workflow_workspace["root"] / "books" / "books_books.jpg").exists()
-    assert (workflow_workspace["root"] / "comics" / "comics_comics.jpg").exists()
-    assert not (uploads_dir / "art.png").exists()
+    assert (workflow_workspace["root"] / "art" / "picasso.png").exists()
+    assert (workflow_workspace["root"] / "art" / "picasso2.png").exists()
+    assert (workflow_workspace["root"] / "books" / "library_book.jpg").exists()
+    assert (workflow_workspace["root"] / "books" / "library_book2.jpg").exists()
+    assert (workflow_workspace["root"] / "comics" / "garfield.jpg").exists()
+    assert (workflow_workspace["root"] / "comics" / "garfield2.jpg").exists()
+    assert not (uploads_dir / "picasso.png").exists()
 
 
 def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
@@ -225,11 +257,51 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "This row should not render." not in html
 
 
+def test_make_unique_returns_original_when_available(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "image.jpg"
+
+    assert make_unique(path) == str(path)
+
+
+@pytest.mark.parametrize(
+    ("filename", "existing_filenames", "expected_filename"),
+    [
+        ("image.jpg", ["image.jpg"], "image2.jpg"),
+        ("image.jpg", ["image.jpg", "image2.jpg"], "image3.jpg"),
+        ("image1.jpg", ["image1.jpg"], "image1_2.jpg"),
+        ("image1.jpg", ["image1.jpg", "image1_2.jpg"], "image1_3.jpg"),
+    ],
+)
+def test_make_unique_uses_suffixes_two_through_nine(
+    tmp_path: Path,
+    filename: str,
+    existing_filenames: list[str],
+    expected_filename: str,
+) -> None:
+    for existing_filename in existing_filenames:
+        (tmp_path / existing_filename).touch()
+
+    assert make_unique(tmp_path / filename) == str(tmp_path / expected_filename)
+
+
+def test_make_unique_raises_after_suffix_nine(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "image.jpg").touch()
+    for suffix in range(2, 10):
+        (tmp_path / f"image{suffix}.jpg").touch()
+
+    with pytest.raises(FileExistsError):
+        make_unique(tmp_path / "image.jpg")
+
+
 @pytest.mark.parametrize(
     ("verbosity_args", "expected"),
     [
-        (("-q",), "number of image files to tag: 7\n......."),
-        ((), "books.jpg -> books_books.jpg"),
+        (("-q",), "number of image files to tag: 9\n........."),
+        ((), "books.jpg -> library_book.jpg"),
         (("-v",), "'original_filename': 'books.jpg'"),
     ],
 )

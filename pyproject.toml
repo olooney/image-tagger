@@ -28,11 +28,11 @@ dependencies = [
 pythonpath = ["src"]
 
 [tool.setuptools]
-py-modules = ["cli", "constants", "convert_uploads", "image_tagger", "util"]
+py-modules = ["cli", "constants", "convert", "image_tagger", "util"]
 packages = ["image_tagger_data"]
 
 [tool.setuptools.package-dir]
 "" = "src"
 
 [tool.setuptools.package-data]
-image_tagger_data = ["template.html"]
+image_tagger_data = ["*"]

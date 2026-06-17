@@ -4,7 +4,7 @@ from pathlib import Path
 
 import image_tagger as it
 from constants import GALLERY_NAME, METADATA_FILENAME, UPLOAD_DIR, WELCOME_EXTENSIONS
-from convert_uploads import (
+from convert import (
     convert_images,
     count_files_by_extension,
     delete_duplicate_images,
