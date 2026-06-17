@@ -13,17 +13,14 @@ register_heif_opener()
 
 
 def list_images(directories: str | Path | Sequence[str | Path]) -> Iterator[Path]:
-    """
-    Recursively yield image files from one or more directories or glob patterns.
-    Accepts Path, str, or lists of them. Filters by IMAGE_EXTENSIONS (case-insensitive).
-    """
-    # Normalize input to list of Path objects
+    """Yield supported image files from paths or globs."""
+    # normalize input to a list of Path-like entries
     if isinstance(directories, (str, Path)):
         directories = [directories]
 
     for entry in directories:
         path = Path(entry)
-        # If the input is a glob pattern
+        # expand glob entries before walking directories
         if isinstance(entry, str) and any(c in entry for c in "*?[]"):
             candidates = Path().glob(entry)
         elif path.is_dir():
@@ -38,8 +35,9 @@ def list_images(directories: str | Path | Sequence[str | Path]) -> Iterator[Path
                 yield file
 
 
-def find_duplicate_basenames(directory):
-    basenames = defaultdict(list)
+def find_duplicate_basenames(directory: str | Path) -> dict[str, list[str]]:
+    """Find image stems with multiple extensions."""
+    basenames: defaultdict[str, list[str]] = defaultdict(list)
 
     for filename in list_images(directory):
         basename, ext = os.path.splitext(filename)
@@ -53,23 +51,23 @@ def find_duplicate_basenames(directory):
 
 
 def convert_images(
-    directory,
-    input_extensions=UNWELCOME_EXTENSIONS,
-    output_format="JPEG",
-    output_extension=".jpg",
-    dry_run=False,
-):
-    # List all files in the given directory
+    directory: str | Path,
+    input_extensions: Sequence[str] = UNWELCOME_EXTENSIONS,
+    output_format: str = "JPEG",
+    output_extension: str = ".jpg",
+    dry_run: bool = False,
+) -> None:
+    """Convert unwelcome image formats to a target format."""
     for filename in list_images(directory):
         file_path = os.path.join(directory, filename)
         base_name, extension = os.path.splitext(filename)
 
         if extension.lower() in input_extensions:
-            # map the filename
+            # choose a collision-free output filename
             output_filename = os.path.join(directory, base_name + output_extension)
             output_filename = make_unique(output_filename)
 
-            # convert the image
+            # rewrite the image unless this is a dry run
             if not dry_run:
                 with Image.open(file_path) as img:
                     img.convert("RGB").save(output_filename, output_format)
@@ -77,8 +75,11 @@ def convert_images(
 
 
 def delete_duplicate_images(
-    directory, input_extensions=UNWELCOME_EXTENSIONS, dry_run=False
-):
+    directory: str | Path,
+    input_extensions: Sequence[str] = UNWELCOME_EXTENSIONS,
+    dry_run: bool = False,
+) -> None:
+    """Remove unwelcome duplicates when welcome copies exist."""
     dupes = find_duplicate_basenames(directory)
     for base, exts in dupes.items():
         welcome_exts = [ext for ext in exts if (ext not in input_extensions)]
@@ -94,13 +95,15 @@ def delete_duplicate_images(
                     )
 
 
-def normalize_image_extensions(directory, dry_run=False):
-    # Loop through all files in the directory
+def normalize_image_extensions(
+    directory: str | Path,
+    dry_run: bool = False,
+) -> None:
+    """Lowercase supported image extensions."""
     for filename in list_images(directory):
         base, extension = os.path.splitext(filename)
         if extension.lower() in IMAGE_EXTENSIONS:
             old_file = os.path.join(directory, filename)
-            # Normalize extension to lowercase (keep the dot)
             new_file = os.path.join(directory, base + extension.lower())
             if old_file != new_file:
                 if not dry_run:
@@ -108,21 +111,19 @@ def normalize_image_extensions(directory, dry_run=False):
                 print(f"Renamed '{old_file}' to '{new_file}'")
 
 
-def count_files_by_extension(directory):
-    # Dictionary to hold file extension counts
-    extension_counts = defaultdict(int)
+def count_files_by_extension(directory: str | Path) -> dict[str, int]:
+    """Count supported image files by extension."""
+    extension_counts: defaultdict[str, int] = defaultdict(int)
 
-    # Iterate over each file in the directory
     for filename in list_images(directory):
-        # Extract the file extension
         _, extension = os.path.splitext(filename)
-        # Increment count of this extension
         extension_counts[extension] += 1
 
     return dict(sorted(extension_counts.items()))
 
 
-def format_extension_counts(extension_counts):
+def format_extension_counts(extension_counts: dict[str, int]) -> str:
+    """Format extension counts for console output."""
     if not extension_counts:
         return "no image files found"
     return "\n".join(
@@ -130,7 +131,11 @@ def format_extension_counts(extension_counts):
     )
 
 
-def rename_jpeg_to_jpg(directory, dry_run=False):
+def rename_jpeg_to_jpg(
+    directory: str | Path,
+    dry_run: bool = False,
+) -> None:
+    """Rename .jpeg files to .jpg."""
     for filename in list_images(directory):
         base, extension = os.path.splitext(filename)
         if extension.lower() == ".jpeg":
@@ -141,7 +146,11 @@ def rename_jpeg_to_jpg(directory, dry_run=False):
             print(f"Renamed '{old_file}' to '{new_file}'")
 
 
-def main(directory: Path, dry_run=False):
+def main(
+    directory: Path,
+    dry_run: bool = False,
+) -> None:
+    """Run the full conversion workflow."""
     directory_string = str(directory)
     find_duplicate_basenames(directory_string)
     convert_images(directory_string, dry_run=dry_run)

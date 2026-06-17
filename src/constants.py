@@ -1,10 +1,10 @@
 from pathlib import Path
 
-UPLOAD_DIR = Path(r"C:\Users\oloon\Dropbox\images\uploads")
-METADATA_FILENAME = UPLOAD_DIR / "image_metadata.csv"
-GALLERY_NAME = UPLOAD_DIR / "index.html"
+UPLOAD_DIR: Path = Path(r"C:\Users\oloon\Dropbox\images\uploads")
+METADATA_FILENAME: Path = UPLOAD_DIR / "image_metadata.csv"
+GALLERY_NAME: Path = UPLOAD_DIR / "index.html"
 
-IMAGE_EXTENSIONS = [
+IMAGE_EXTENSIONS: list[str] = [
     ".jpg",
     ".jpeg",
     ".png",
@@ -15,7 +15,13 @@ IMAGE_EXTENSIONS = [
     ".avif",
     ".heic",
 ]
-UNWELCOME_EXTENSIONS = [".webp", ".avif", ".heic", ".bmp", ".gif"]
-WELCOME_EXTENSIONS = [
+UNWELCOME_EXTENSIONS: list[str] = [
+    ".webp",
+    ".avif",
+    ".heic",
+    ".bmp",
+    ".gif",
+]
+WELCOME_EXTENSIONS: list[str] = [
     extension for extension in IMAGE_EXTENSIONS if extension not in UNWELCOME_EXTENSIONS
 ]

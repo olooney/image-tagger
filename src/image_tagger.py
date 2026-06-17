@@ -29,6 +29,8 @@ from util import Pathish, TemporarySeed, connect_to_openai, make_unique
 
 
 class ImageTagData(BaseModel):
+    """Structured metadata returned by vision models."""
+
     description: str
     category: str
     genre: str
@@ -37,11 +39,11 @@ class ImageTagData(BaseModel):
     filename: str
 
 
-IMAGE_PROMPT_TEMPLATE = (
+IMAGE_PROMPT_TEMPLATE: str = (
     resources.files("image_tagger_data").joinpath("image_prompt.md").read_text()
 )
 
-csv_columns = [
+csv_columns: list[str] = [
     "timestamp",
     "status",
     "total_tokens",
@@ -62,6 +64,7 @@ csv_columns = [
 
 
 def quote_display_path(path: str | os.PathLike[str]) -> str:
+    """Quote a path for command-line display."""
     return subprocess.list2cmdline([os.fspath(path)])
 
 
@@ -71,6 +74,7 @@ def display_path(
     verbose: int,
     relative_to: str | os.PathLike[str],
 ) -> str:
+    """Format a path for verbose output."""
     display = os.fspath(path)
     if verbose == 1:
         display = os.path.relpath(display, os.fspath(relative_to))
@@ -79,31 +83,39 @@ def display_path(
 
 
 class VisionModelProvider(Enum):
+    """Supported vision model providers."""
+
     OPENAI = "openai"
     GEMMA = "gemma"
     QWEN = "qwen"
 
 
-GEMMA_MODEL = "gemma4:e4b"
-OPENAI_MODEL = "gpt-5.4"
-QWEN_MODEL = "qwen3.5:4b"
+GEMMA_MODEL: str = "gemma4:e4b"
+OPENAI_MODEL: str = "gpt-5.4"
+QWEN_MODEL: str = "qwen3.5:4b"
 
 
 @dataclass(frozen=True)
 class VisionTaskResult:
+    """Raw vision model response data."""
+
     content: str
     model: str
     total_tokens: int
 
 
 class VisionModelClientAdapter(ABC):
+    """Common interface for vision providers."""
+
     provider_name: str
     model: str
 
     def __str__(self) -> str:
+        """Format the provider for console output."""
         return f"{self.provider_name} ({self.model})"
 
     def __repr__(self) -> str:
+        """Format the provider for debugging."""
         return f"{self.__class__.__name__}(model={self.model!r})"
 
     @abstractmethod
@@ -113,17 +125,22 @@ class VisionModelClientAdapter(ABC):
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
+        """Run a vision task."""
         pass
 
     @abstractmethod
     def cleanup(self) -> None:
+        """Release provider resources."""
         pass
 
 
 class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
+    """OpenAI vision provider adapter."""
+
     provider_name = "OpenAI"
 
     def __init__(self, model: str = OPENAI_MODEL) -> None:
+        """Create an OpenAI adapter."""
         self.model = model
         self.client = connect_to_openai()
 
@@ -133,6 +150,7 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
+        """Run an OpenAI vision request."""
         url = f"data:image/png;base64,{image_base64}"
         response = self.client.beta.chat.completions.parse(
             model=self.model,
@@ -161,13 +179,17 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
         )
 
     def cleanup(self) -> None:
+        """OpenAI cleanup hook."""
         pass
 
 
 class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
+    """Ollama vision provider adapter."""
+
     provider_name = "Ollama"
 
     def __init__(self, model: str) -> None:
+        """Create an Ollama adapter."""
         import ollama
 
         self.model = model
@@ -179,6 +201,7 @@ class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
+        """Run an Ollama vision request."""
         response = self.client.chat(
             model=self.model,
             messages=[
@@ -204,6 +227,7 @@ class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
         )
 
     def cleanup(self) -> None:
+        """Unload the Ollama model."""
         self.client.generate(model=self.model, prompt="", keep_alive=0)
 
 
@@ -213,6 +237,7 @@ _vision_model_client_adapters: dict[VisionModelProvider, VisionModelClientAdapte
 def get_vision_model_client_adapter(
     provider: VisionModelProvider,
 ) -> VisionModelClientAdapter:
+    """Return a cached adapter for a provider."""
     provider = VisionModelProvider(provider)
     if provider not in _vision_model_client_adapters:
         if provider == VisionModelProvider.OPENAI:
@@ -231,7 +256,7 @@ def get_vision_model_client_adapter(
 
 
 def clean_filename(filename: str) -> str:
-    """Cleans up a filename by removing unloved characters."""
+    """Clean up a suggested filename."""
     filename = filename.lower()
     filename = re.sub(r"^[^a-zA-Z_]+", "", filename)  # strip leading whitespace
     filename = re.sub(r"[\s_-]+", "_", filename)  # whitespace to underscore
@@ -242,12 +267,7 @@ def clean_filename(filename: str) -> str:
 
 
 def fix_extension(current_filename: str, suggested_filename: str) -> str:
-    """
-    Ensures that the suggested filename has to correct extension, which
-    is something GPT seems to struggle with. Renaming an image file to
-    have the wrong extension will create a mismatch between the contents
-    and extension, something we want to avoid.
-    """
+    """Force a suggested filename to keep its original extension."""
     current_ext = os.path.splitext(current_filename)[1].lower()
     suggested_base, suggested_ext = os.path.splitext(suggested_filename)
     if current_ext != suggested_ext:
@@ -256,10 +276,7 @@ def fix_extension(current_filename: str, suggested_filename: str) -> str:
 
 
 def path_name_ext(path: str) -> tuple[str, str, str]:
-    """
-    Splits a full path name into a directory, base name,
-    and extension, e.g. ("/static/images/", "logo", ".png")
-    """
+    """Split a path into directory, stem, and extension."""
     dir_path = os.path.dirname(path)
     filename_with_ext = os.path.basename(path)
     filename, ext = os.path.splitext(filename_with_ext)
@@ -269,22 +286,17 @@ def path_name_ext(path: str) -> tuple[str, str, str]:
 
 
 def scramble(filename: str) -> str:
-    """Hashes a filename to obscure it. Only used for testing."""
+    """Hash a filename to obscure it for testing."""
     with TemporarySeed(seed=hash(filename)):
         return "".join(random.sample(string.ascii_letters, k=8))
 
 
 def resize_image_to_fit(
-    image: Image.Image | str, max_dimension: int = 512
+    image: Image.Image | str,
+    max_dimension: int = 512,
 ) -> Image.Image:
-    """
-    Resizes the image to always fit within a 512x512 square
-    regardless of aspect ratio. The returned image will always
-    be smaller than 512 along both dimensions but will preserve
-    its original aspect ratio. This allows it to consume only
-    one "tile" in the GPT API.
-    """
-    # read from disk if given as filename
+    """Resize an image to fit inside a square."""
+    # read from disk if given a filename
     if isinstance(image, str):
         image = Image.open(image)
     original_width, original_height = image.size
@@ -296,20 +308,17 @@ def resize_image_to_fit(
         else:
             scaling_factor = max_dimension / original_height
 
-        # Calculate new dimensions based on scaling factor
+        # calculate new dimensions from the chosen scale
         new_width = int(original_width * scaling_factor)
         new_height = int(original_height * scaling_factor)
 
-        # Resize the image to the new dimensions
+        # resize with high-quality downsampling
         image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
     return image
 
 
 def base64_encode_image(image: Image.Image | Pathish) -> str:
-    """
-    Encodes a Pillow image as base64 in a format GPT
-    will accept.
-    """
+    """Encode an image as base64 PNG data."""
 
     if not isinstance(image, Image.Image):
         image = Image.open(os.fspath(image))
@@ -327,6 +336,7 @@ def tag_image(
     client_adapter: VisionModelClientAdapter,
     prompt_template: str = IMAGE_PROMPT_TEMPLATE,
 ) -> dict[str, Any]:
+    """Tag a single image with a vision model."""
     # handle local or remote images
     if filepath.startswith("http"):
         url = filepath
@@ -340,6 +350,7 @@ def tag_image(
 
     base64_image_data = base64_encode_image(image)
 
+    # run the tagging vision task and record the time it took
     prompt = prompt_template.format(filename=filename)
     vision_start_time = time.perf_counter()
     response = client_adapter.vision_task(base64_image_data, prompt, ImageTagData)
@@ -375,6 +386,7 @@ def tag_images(
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
     instructions_filename: str | os.PathLike[str] | None = None,
 ) -> None:
+    """Tag images and write metadata rows."""
     client_adapter = get_vision_model_client_adapter(provider)
     if instructions_filename is None:
         prompt_template = IMAGE_PROMPT_TEMPLATE
@@ -399,6 +411,7 @@ def tag_images(
                 row_start_time = time.perf_counter()
 
                 try:
+                    # run the model and normalize row fields for CSV output
                     row = tag_image(filepath, client_adapter, prompt_template)
                     duration = row.pop("vision_duration")
                     vision_durations.append(duration)
@@ -459,6 +472,7 @@ def tag_images(
 
 
 def previously_tagged_filenames(metadata_filename: str | os.PathLike[str]) -> set[str]:
+    """Return filenames already tagged successfully."""
     if not os.path.exists(metadata_filename):
         return set()
 
@@ -484,6 +498,7 @@ def find_images(
     metadata_filename: str | os.PathLike[str] | None = None,
     extension_filter: Iterable[str] | None = WELCOME_EXTENSIONS,
 ) -> list[str]:
+    """Find untagged image files in directories."""
     if max_days_old is None:
         max_days_old = float("Inf")
 
@@ -526,6 +541,7 @@ def scramble_image_directory(
     output_dir: str,
     max_dimension: int = 512,
 ) -> None:
+    """Copy resized images with scrambled stems."""
     for filepath in find_images(input_dir):
         path, name, ext = path_name_ext(filepath)
         scrambled_name = scramble(name)
@@ -539,6 +555,7 @@ def rename_images(
     verbose: int = 1,
     dry_run: bool = False,
 ) -> None:
+    """Rename images from metadata suggestions."""
     metadata_df = pd.read_csv(csv_filename)
     metadata_updated = False
     display_directory = os.path.dirname(os.fspath(csv_filename)) or os.curdir
@@ -553,7 +570,7 @@ def rename_images(
             continue
 
         # new filename
-        directory, old_filename = os.path.split(source)
+        directory, _old_filename = os.path.split(source)
         new_filename = row["clean_filename"]
         target = os.path.join(directory, new_filename)
 
@@ -623,6 +640,7 @@ def shelve_images(
     verbose: int = 1,
     dry_run: bool = False,
 ) -> None:
+    """Move images into category folders."""
     metadata_df = pd.read_csv(csv_filename)
     upload_directory = os.path.dirname(os.fspath(csv_filename)) or os.curdir
     display_directory = os.path.dirname(upload_directory) or os.curdir
@@ -698,6 +716,7 @@ def generate_gallery(
     output_filename: str | os.PathLike[str],
     verbose: int = 1,
 ) -> None:
+    """Generate a static gallery HTML file."""
     # read the metadata and prepare for merge
     metadata_df = pd.read_csv(csv_filename)
     metadata_df = metadata_df[metadata_df["status"] == "ok"]

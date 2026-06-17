@@ -2,6 +2,7 @@ import csv
 import json
 import shutil
 import sys
+from collections.abc import Callable
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -14,10 +15,10 @@ import image_tagger as it
 from constants import WELCOME_EXTENSIONS
 from util import make_unique
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 
 
-CATEGORIES = [
+CATEGORIES: list[str] = [
     "ai",
     "art",
     "books",
@@ -32,7 +33,7 @@ CATEGORIES = [
 ]
 
 
-TEST_CLEAN_FILENAMES = {
+TEST_CLEAN_FILENAMES: dict[str, str] = {
     "ai.jpg": "robot_portrait.jpg",
     "art.png": "picasso.png",
     "books.jpg": "library_book.jpg",
@@ -47,7 +48,7 @@ TEST_CLEAN_FILENAMES = {
 }
 
 
-TEST_CATEGORIES = {
+TEST_CATEGORIES: dict[str, str] = {
     "ai.jpg": "ai",
     "art.png": "art",
     "books.jpg": "books",
@@ -66,6 +67,8 @@ PROMPTS: list[str] = []
 
 
 class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
+    """Vision adapter with deterministic test metadata."""
+
     provider_name = "Mock"
     model = "mock-vision"
 
@@ -75,6 +78,7 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
         prompt: str,
         response_format: type[BaseModel],
     ) -> it.VisionTaskResult:
+        """Return canned metadata for a prompt filename."""
         PROMPTS.append(prompt)
         filename = prompt.rsplit('Current filename: "', maxsplit=1)[1].split(
             '"', maxsplit=1
@@ -95,11 +99,13 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
         return it.VisionTaskResult(content=content, model=self.model, total_tokens=0)
 
     def cleanup(self) -> None:
+        """No-op cleanup for tests."""
         pass
 
 
 @pytest.fixture
 def workflow_workspace(tmp_path: Path) -> dict[str, Path]:
+    """Create a full upload workflow workspace."""
     uploads_dir = tmp_path / "uploads"
     uploads_dir.mkdir()
     for category in CATEGORIES:
@@ -118,8 +124,11 @@ def workflow_workspace(tmp_path: Path) -> dict[str, Path]:
 
 
 @pytest.fixture
-def run_cli(monkeypatch: pytest.MonkeyPatch):
+def run_cli(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
+    """Run the CLI and capture stdout."""
+
     def runner(*args: str) -> str:
+        """Run one CLI command."""
         stdout = StringIO()
         monkeypatch.setattr(sys, "argv", ["cli.py", *args])
         with redirect_stdout(stdout):
@@ -130,8 +139,14 @@ def run_cli(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def run_tag(monkeypatch: pytest.MonkeyPatch, run_cli):
+def run_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    run_cli: Callable[..., str],
+) -> Callable[..., str]:
+    """Run tag with the mock vision adapter."""
+
     def runner(uploads_dir: Path, *args: str) -> str:
+        """Run one tag command."""
         monkeypatch.setattr(
             it,
             "get_vision_model_client_adapter",
@@ -143,8 +158,11 @@ def run_tag(monkeypatch: pytest.MonkeyPatch, run_cli):
 
 
 def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
-    workflow_workspace: dict[str, Path], run_cli, run_tag
+    workflow_workspace: dict[str, Path],
+    run_cli: Callable[..., str],
+    run_tag: Callable[..., str],
 ) -> None:
+    """Exercise the full upload workflow."""
     uploads_dir = workflow_workspace["uploads"]
     metadata_filename = workflow_workspace["metadata"]
     gallery_filename = workflow_workspace["gallery"]
@@ -231,6 +249,7 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
 
 
 def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
+    """Render expected gallery HTML from metadata."""
     metadata_filename = tmp_path / "image_metadata.csv"
     gallery_filename = tmp_path / "index.html"
     with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
@@ -288,6 +307,7 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
 def test_make_unique_returns_original_when_available(
     tmp_path: Path,
 ) -> None:
+    """Return unchanged paths when no collision exists."""
     path = tmp_path / "image.jpg"
 
     assert make_unique(path) == str(path)
@@ -308,6 +328,7 @@ def test_make_unique_uses_suffixes_two_through_nine(
     existing_filenames: list[str],
     expected_filename: str,
 ) -> None:
+    """Append suffixes for filename collisions."""
     for existing_filename in existing_filenames:
         (tmp_path / existing_filename).touch()
 
@@ -317,6 +338,7 @@ def test_make_unique_uses_suffixes_two_through_nine(
 def test_make_unique_raises_after_suffix_nine(
     tmp_path: Path,
 ) -> None:
+    """Raise when all supported suffixes are taken."""
     (tmp_path / "image.jpg").touch()
     for suffix in range(2, 10):
         (tmp_path / f"image{suffix}.jpg").touch()
@@ -327,8 +349,9 @@ def test_make_unique_raises_after_suffix_nine(
 
 def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
     tmp_path: Path,
-    run_cli,
+    run_cli: Callable[..., str],
 ) -> None:
+    """Show relative rename paths at default verbosity."""
     uploads_dir = tmp_path / "uploads"
     uploads_dir.mkdir()
     source = uploads_dir / "image 234.jpg"
@@ -354,8 +377,9 @@ def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
 
 def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
     tmp_path: Path,
-    run_cli,
+    run_cli: Callable[..., str],
 ) -> None:
+    """Show parent-relative shelve paths at default verbosity."""
     uploads_dir = tmp_path / "uploads"
     diagrams_dir = tmp_path / "diagrams"
     uploads_dir.mkdir()
@@ -385,7 +409,11 @@ def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
     )
 
 
-def test_rename_verbosity_two_prints_full_quoted_paths(tmp_path: Path, run_cli) -> None:
+def test_rename_verbosity_two_prints_full_quoted_paths(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Show full rename paths at higher verbosity."""
     uploads_dir = tmp_path / "uploads"
     uploads_dir.mkdir()
     source = uploads_dir / "My Mother's Photo.jpg"
@@ -420,12 +448,13 @@ def test_rename_verbosity_two_prints_full_quoted_paths(tmp_path: Path, run_cli) 
 )
 def test_tag_verbosity_zero_one_and_two(
     tmp_path: Path,
-    run_cli,
-    run_tag,
+    run_cli: Callable[..., str],
+    run_tag: Callable[..., str],
     workflow_workspace: dict[str, Path],
     verbosity_args: tuple[str, ...],
     expected: str,
 ) -> None:
+    """Respect tag verbosity levels."""
     uploads_dir = tmp_path / "verbosity_uploads"
     shutil.copytree(workflow_workspace["uploads"], uploads_dir)
     run_cli("convert", str(uploads_dir))
@@ -437,10 +466,11 @@ def test_tag_verbosity_zero_one_and_two(
 
 def test_tag_allows_instructions_filename_override(
     tmp_path: Path,
-    run_cli,
-    run_tag,
+    run_cli: Callable[..., str],
+    run_tag: Callable[..., str],
     workflow_workspace: dict[str, Path],
 ) -> None:
+    """Use custom tagging instructions."""
     uploads_dir = tmp_path / "instructions_uploads"
     shutil.copytree(workflow_workspace["uploads"], uploads_dir)
     run_cli("convert", str(uploads_dir))

@@ -16,11 +16,13 @@ from util import preview
 
 
 def path_arg(value: str) -> Path:
+    """Parse a CLI path argument."""
     return Path(value)
 
 
 def extensions_arg(value: str) -> list[str]:
-    extensions = []
+    """Parse comma, semicolon, or whitespace-separated extensions."""
+    extensions: list[str] = []
     for extension in re.split(r"[\s,;]+", value.strip()):
         if not extension:
             continue
@@ -32,6 +34,7 @@ def extensions_arg(value: str) -> list[str]:
 
 
 def convert_uploads(args: argparse.Namespace) -> None:
+    """Run upload conversion steps."""
     directory = args.directory
     convert_images(str(directory), dry_run=args.dry_run)
     delete_duplicate_images(str(directory), dry_run=args.dry_run)
@@ -41,6 +44,7 @@ def convert_uploads(args: argparse.Namespace) -> None:
 
 
 def tag_uploads(args: argparse.Namespace) -> None:
+    """Tag upload images."""
     filepaths = it.find_images(
         str(args.directory),
         metadata_filename=args.metadata_filename,
@@ -58,6 +62,7 @@ def tag_uploads(args: argparse.Namespace) -> None:
 
 
 def rename_uploads(args: argparse.Namespace) -> None:
+    """Rename uploads from metadata."""
     it.rename_images(
         args.metadata_filename,
         verbose=args.verbose,
@@ -66,6 +71,7 @@ def rename_uploads(args: argparse.Namespace) -> None:
 
 
 def shelve_uploads(args: argparse.Namespace) -> None:
+    """Move uploads into category folders."""
     it.shelve_images(
         args.metadata_filename,
         verbose=args.verbose,
@@ -74,6 +80,7 @@ def shelve_uploads(args: argparse.Namespace) -> None:
 
 
 def scramble_uploads(args: argparse.Namespace) -> None:
+    """Scramble upload filenames."""
     renamed_count = 0
     for filepath in it.find_images(str(args.directory)):
         _, stem, extension = it.path_name_ext(filepath)
@@ -96,14 +103,18 @@ def scramble_uploads(args: argparse.Namespace) -> None:
 
 
 def gallery_uploads(args: argparse.Namespace) -> None:
+    """Generate and optionally preview a gallery."""
     it.generate_gallery(
-        args.metadata_filename, args.output_filename, verbose=args.verbose
+        args.metadata_filename,
+        args.output_filename,
+        verbose=args.verbose,
     )
     if args.preview:
         preview(args.output_filename)
 
 
 def clean_uploads(args: argparse.Namespace) -> None:
+    """Remove generated workflow files."""
     for filename in [args.metadata_filename, args.output_filename]:
         if filename.exists():
             if args.dry_run:
@@ -116,6 +127,7 @@ def clean_uploads(args: argparse.Namespace) -> None:
 
 
 def add_common_upload_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments shared by upload commands."""
     parser.add_argument("directory", nargs="?", type=path_arg, default=UPLOAD_DIR)
     parser.add_argument("--metadata-filename", type=path_arg)
     parser.set_defaults(verbose=1)
@@ -143,6 +155,7 @@ def add_common_upload_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser."""
     parser = argparse.ArgumentParser(description="Image tagger upload workflow tools.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -157,7 +170,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_upload_args(tag_parser)
     tag_parser.add_argument(
-        "--provider", choices=["openai", "gemma", "qwen"], default="openai"
+        "--provider",
+        choices=["openai", "gemma", "qwen"],
+        default="openai",
     )
     tag_parser.add_argument(
         "--extensions", type=extensions_arg, default=WELCOME_EXTENSIONS
@@ -207,6 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """Run the selected CLI command."""
     parser = build_parser()
     args = parser.parse_args()
     if args.metadata_filename is None:
