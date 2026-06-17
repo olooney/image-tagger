@@ -1,38 +1,38 @@
-import os
-import re
-import json
 import base64
-import subprocess
-from urllib.parse import urlsplit
-from io import BytesIO
-import time
 import csv
-from datetime import datetime
-import traceback
+import json
+import os
 import random
+import re
 import string
+import subprocess
+import time
+import traceback
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from enum import Enum
 from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from importlib import resources
+from io import BytesIO
+from typing import Any
+from urllib.parse import urlsplit
 
-import pandas as pd
-from PIL import Image
-import requests
 import jinja2
+import pandas as pd
+import requests
+from PIL import Image
 from pydantic import BaseModel
-from typing import Any, List
 
-from util import connect_to_openai, make_unique, TemporarySeed, Pathish
 from constants import WELCOME_EXTENSIONS
+from util import Pathish, TemporarySeed, connect_to_openai, make_unique
 
 
 class ImageTagData(BaseModel):
     description: str
     category: str
     genre: str
-    tags: List[str]
+    tags: list[str]
     filename_already_makes_sense: bool
     filename: str
 
@@ -379,7 +379,7 @@ def tag_images(
     if instructions_filename is None:
         prompt_template = IMAGE_PROMPT_TEMPLATE
     else:
-        with open(instructions_filename, "r", encoding="utf-8") as instructions_file:
+        with open(instructions_filename, encoding="utf-8") as instructions_file:
             prompt_template = instructions_file.read()
     if verbose >= 1:
         print(f"Using {client_adapter}")
@@ -463,7 +463,7 @@ def previously_tagged_filenames(metadata_filename: str | os.PathLike[str]) -> se
         return set()
 
     tagged_filenames = set()
-    with open(metadata_filename, "r", newline="", encoding="utf-8") as csvfile:
+    with open(metadata_filename, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             if row.get("status") != "ok":

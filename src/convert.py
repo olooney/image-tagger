@@ -1,13 +1,13 @@
 import os
+from collections import defaultdict
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+
 from PIL import Image
 from pillow_heif import register_heif_opener
-from pathlib import Path
-from typing import Iterator, Sequence
-from collections import defaultdict
 
 from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS, UPLOAD_DIR
 from util import make_unique
-
 
 register_heif_opener()
 

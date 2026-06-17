@@ -36,3 +36,19 @@ packages = ["image_tagger_data"]
 
 [tool.setuptools.package-data]
 image_tagger_data = ["*"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # PEP 8
+    "F",   # Pyflakes
+    "I",   # import sort
+    "B",   # bugbear
+    "UP",  # PyUpgrade
+    "TRY", # Tryceratops
+]
+ignore = [
+    "E501",   # line length
+    "TRY003", # long exception messages
+    "TRY300", # return outside of else
+    "B905",   # explicit strict in zip()
+]

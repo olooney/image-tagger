@@ -1,16 +1,17 @@
-import sys
+import logging
 import os
-import tenacity
-from collections.abc import Iterable
-import numpy as np
-import yaml
 import random
 import subprocess
+import sys
 import webbrowser
+from collections.abc import Iterable
 from datetime import datetime
-import logging
-from pathlib import Path
 from os import PathLike
+from pathlib import Path
+
+import numpy as np
+import tenacity
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class Config:
 
     @classmethod
     def load(cls, filename):
-        with open(filename, "r") as file:
+        with open(filename) as file:
             data = yaml.safe_load(file)
 
             credentials = cls()

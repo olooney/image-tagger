@@ -14,7 +14,6 @@ import image_tagger as it
 from constants import WELCOME_EXTENSIONS
 from util import make_unique
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
