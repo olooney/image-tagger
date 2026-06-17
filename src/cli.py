@@ -36,8 +36,8 @@ def extensions_arg(value: str) -> list[str]:
 def convert_uploads(args: argparse.Namespace) -> None:
     """Run upload conversion steps."""
     directory = args.directory
-    convert_images(str(directory), dry_run=args.dry_run)
-    delete_duplicate_images(str(directory), dry_run=args.dry_run)
+    convert_images(directory, dry_run=args.dry_run)
+    delete_duplicate_images(directory, dry_run=args.dry_run)
     normalize_image_extensions(directory, dry_run=args.dry_run)
     rename_jpeg_to_jpg(directory, dry_run=args.dry_run)
     print(format_extension_counts(count_files_by_extension(directory)))
@@ -46,7 +46,7 @@ def convert_uploads(args: argparse.Namespace) -> None:
 def tag_uploads(args: argparse.Namespace) -> None:
     """Tag upload images."""
     filepaths = it.find_images(
-        str(args.directory),
+        args.directory,
         metadata_filename=args.metadata_filename,
         extension_filter=args.extensions,
     )
@@ -82,9 +82,9 @@ def shelve_uploads(args: argparse.Namespace) -> None:
 def scramble_uploads(args: argparse.Namespace) -> None:
     """Scramble upload filenames."""
     renamed_count = 0
-    for filepath in it.find_images(str(args.directory)):
-        _, stem, extension = it.path_name_ext(filepath)
-        source = args.directory / f"{stem}{extension}"
+    for source in it.find_images(args.directory):
+        stem = source.stem
+        extension = source.suffix
         target = args.directory / f"{it.scramble(stem)}{extension}"
 
         if source == target:

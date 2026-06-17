@@ -60,16 +60,15 @@ def preview(html_path: Pathish) -> None:
 
 def make_unique(path: Pathish) -> str:
     """Return an available path by adding suffixes."""
-    path = os.fspath(path)
-    if not os.path.exists(path):
-        return path
+    path = Path(path)
+    if not path.exists():
+        return os.fspath(path)
 
-    path_base, path_ext = os.path.splitext(path)
-    separator = "_" if path_base[-1:].isdigit() else ""
+    separator = "_" if path.stem[-1:].isdigit() else ""
     for suffix in range(2, 10):
-        candidate = f"{path_base}{separator}{suffix}{path_ext}"
-        if not os.path.exists(candidate):
-            return candidate
+        candidate = path.with_name(f"{path.stem}{separator}{suffix}{path.suffix}")
+        if not candidate.exists():
+            return os.fspath(candidate)
 
     raise FileExistsError(f"No available filename from {path!r} through suffix 9.")
 
@@ -181,9 +180,7 @@ def connect_to_openai() -> Any:
     """Create an OpenAI client using local credentials."""
     import openai
 
-    openai_credentials_filename = os.path.join(
-        os.path.expanduser("~"), ".openai", "credentials.yaml"
-    )
+    openai_credentials_filename = Path.home() / ".openai" / "credentials.yaml"
     Credentials.load(openai_credentials_filename)
     client = openai.OpenAI()
     return client

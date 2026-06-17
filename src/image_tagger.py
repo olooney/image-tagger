@@ -15,7 +15,8 @@ from datetime import datetime
 from enum import Enum
 from importlib import resources
 from io import BytesIO
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import jinja2
@@ -63,22 +64,23 @@ csv_columns: list[str] = [
 ]
 
 
-def quote_display_path(path: str | os.PathLike[str]) -> str:
+def quote_display_path(path: Pathish) -> str:
     """Quote a path for command-line display."""
     return subprocess.list2cmdline([os.fspath(path)])
 
 
 def display_path(
-    path: str | os.PathLike[str],
+    path: Pathish,
     *,
     verbose: int,
-    relative_to: str | os.PathLike[str],
+    relative_to: Pathish,
 ) -> str:
     """Format a path for verbose output."""
-    display = os.fspath(path)
+    display_path = Path(path)
     if verbose == 1:
-        display = os.path.relpath(display, os.fspath(relative_to))
-        display = display.replace(os.sep, "/")
+        display = display_path.relative_to(relative_to).as_posix()
+    else:
+        display = os.fspath(display_path)
     return quote_display_path(display)
 
 
@@ -268,21 +270,17 @@ def clean_filename(filename: str) -> str:
 
 def fix_extension(current_filename: str, suggested_filename: str) -> str:
     """Force a suggested filename to keep its original extension."""
-    current_ext = os.path.splitext(current_filename)[1].lower()
-    suggested_base, suggested_ext = os.path.splitext(suggested_filename)
-    if current_ext != suggested_ext:
-        suggested_filename = suggested_base + current_ext
-    return suggested_filename
+    current_path = Path(current_filename)
+    suggested_path = Path(suggested_filename)
+    if current_path.suffix.lower() != suggested_path.suffix.lower():
+        suggested_path = suggested_path.with_suffix(current_path.suffix)
+    return suggested_path.name
 
 
-def path_name_ext(path: str) -> tuple[str, str, str]:
+def path_name_ext(path: Pathish) -> tuple[str, str, str]:
     """Split a path into directory, stem, and extension."""
-    dir_path = os.path.dirname(path)
-    filename_with_ext = os.path.basename(path)
-    filename, ext = os.path.splitext(filename_with_ext)
-    if not dir_path.endswith(os.sep):
-        dir_path += os.sep
-    return (dir_path, filename, ext)
+    image_path = Path(path)
+    return (os.fspath(image_path.parent) + os.sep, image_path.stem, image_path.suffix)
 
 
 def scramble(filename: str) -> str:
@@ -292,12 +290,12 @@ def scramble(filename: str) -> str:
 
 
 def resize_image_to_fit(
-    image: Image.Image | str,
+    image: Image.Image | Pathish,
     max_dimension: int = 512,
 ) -> Image.Image:
     """Resize an image to fit inside a square."""
     # read from disk if given a filename
-    if isinstance(image, str):
+    if not isinstance(image, Image.Image):
         image = Image.open(image)
     original_width, original_height = image.size
 
@@ -332,21 +330,23 @@ def base64_encode_image(image: Image.Image | Pathish) -> str:
 
 
 def tag_image(
-    filepath: str,
+    filepath: Pathish,
     client_adapter: VisionModelClientAdapter,
     prompt_template: str = IMAGE_PROMPT_TEMPLATE,
 ) -> dict[str, Any]:
     """Tag a single image with a vision model."""
     # handle local or remote images
-    if filepath.startswith("http"):
-        url = filepath
+    filepath_string = os.fspath(filepath)
+    if filepath_string.startswith("http"):
+        url = filepath_string
         filename = urlsplit(url).path.split("/")[-1]
         response = requests.get(url)
         image = Image.open(BytesIO(response.content))
         image = resize_image_to_fit(image)
     else:
-        _, filename = os.path.split(filepath)
-        image = resize_image_to_fit(filepath)
+        image_path = Path(filepath)
+        filename = image_path.name
+        image = resize_image_to_fit(image_path)
 
     base64_image_data = base64_encode_image(image)
 
@@ -366,7 +366,7 @@ def tag_image(
 
     # format the results
     data["clean_filename"] = suggested_filename_fixed
-    data["original_filepath"] = filepath
+    data["original_filepath"] = filepath_string
     data["original_filename"] = filename
     data["total_tokens"] = response.total_tokens
     data["provider_name"] = client_adapter.provider_name
@@ -379,27 +379,27 @@ def tag_image(
 
 
 def tag_images(
-    filepaths: Iterable[str],
-    output_filename: str | os.PathLike[str],
+    filepaths: Iterable[Pathish],
+    output_filename: Pathish,
     retry_errors: bool = False,
     verbose: int = 1,
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
-    instructions_filename: str | os.PathLike[str] | None = None,
+    instructions_filename: Pathish | None = None,
 ) -> None:
     """Tag images and write metadata rows."""
+    output_path = Path(output_filename)
     client_adapter = get_vision_model_client_adapter(provider)
     if instructions_filename is None:
         prompt_template = IMAGE_PROMPT_TEMPLATE
     else:
-        with open(instructions_filename, encoding="utf-8") as instructions_file:
-            prompt_template = instructions_file.read()
+        prompt_template = Path(instructions_filename).read_text(encoding="utf-8")
     if verbose >= 1:
         print(f"Using {client_adapter}")
-    file_already_exists = os.path.exists(output_filename)
+    file_already_exists = output_path.exists()
     mode = "a" if file_already_exists else "w"
 
     try:
-        with open(output_filename, mode, newline="", encoding="utf-8") as csvfile:
+        with output_path.open(mode, newline="", encoding="utf-8") as csvfile:
             columns = csv_columns
             writer = csv.DictWriter(csvfile, fieldnames=columns)
             if not file_already_exists:
@@ -451,7 +451,7 @@ def tag_images(
                     if verbose == 1:
                         print("e", end=("\n" if (index + 1) % 100 == 0 else ""))
                     elif verbose == 2:
-                        original_filename = os.path.basename(filepath)
+                        original_filename = Path(filepath).name
                         print(
                             f"{datetime.now().isoformat()} {original_filename} -> "
                             f"<none> error {duration:0.2f}s"
@@ -471,13 +471,14 @@ def tag_images(
         client_adapter.cleanup()
 
 
-def previously_tagged_filenames(metadata_filename: str | os.PathLike[str]) -> set[str]:
+def previously_tagged_filenames(metadata_filename: Pathish) -> set[str]:
     """Return filenames already tagged successfully."""
-    if not os.path.exists(metadata_filename):
+    metadata_path = Path(metadata_filename)
+    if not metadata_path.exists():
         return set()
 
-    tagged_filenames = set()
-    with open(metadata_filename, newline="", encoding="utf-8") as csvfile:
+    tagged_filenames: set[str] = set()
+    with metadata_path.open(newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             if row.get("status") != "ok":
@@ -487,23 +488,25 @@ def previously_tagged_filenames(metadata_filename: str | os.PathLike[str]) -> se
                 value = row.get(column)
                 if not value:
                     continue
-                tagged_filenames.add(os.path.basename(value))
+                tagged_filenames.add(Path(value).name)
 
     return tagged_filenames
 
 
 def find_images(
-    dirs: str | Iterable[str],
+    dirs: Pathish | Iterable[Pathish],
     max_days_old: float | None = None,
-    metadata_filename: str | os.PathLike[str] | None = None,
+    metadata_filename: Pathish | None = None,
     extension_filter: Iterable[str] | None = WELCOME_EXTENSIONS,
-) -> list[str]:
+) -> list[Path]:
     """Find untagged image files in directories."""
     if max_days_old is None:
         max_days_old = float("Inf")
 
-    if isinstance(dirs, str):
-        dirs = [dirs]
+    if isinstance(dirs, (str, os.PathLike)):
+        directories = [dirs]
+    else:
+        directories = dirs
 
     tagged_filenames = (
         previously_tagged_filenames(metadata_filename)
@@ -517,19 +520,18 @@ def find_images(
     )
     current_time = time.time()
 
-    filepaths = []
-    for dir in dirs:
-        for filename in os.listdir(dir):
-            filepath = os.path.join(dir, filename)
-            if not os.path.isfile(filepath):
+    filepaths: list[Path] = []
+    for directory in directories:
+        directory_path = Path(cast("Any", directory))
+        for filepath in directory_path.iterdir():
+            if not filepath.is_file():
                 continue
-            if (current_time - os.path.getmtime(filepath)) >= max_days_old * 86400:
+            if (current_time - filepath.stat().st_mtime) >= max_days_old * 86400:
                 continue
             if allowed_extensions is not None:
-                extension = os.path.splitext(filepath)[1].lower()
-                if extension not in allowed_extensions:
+                if filepath.suffix.lower() not in allowed_extensions:
                     continue
-            if filename in tagged_filenames:
+            if filepath.name in tagged_filenames:
                 continue
             filepaths.append(filepath)
 
@@ -537,32 +539,33 @@ def find_images(
 
 
 def scramble_image_directory(
-    input_dir: str,
-    output_dir: str,
+    input_dir: Pathish,
+    output_dir: Pathish,
     max_dimension: int = 512,
 ) -> None:
     """Copy resized images with scrambled stems."""
+    output_path = Path(output_dir)
     for filepath in find_images(input_dir):
-        path, name, ext = path_name_ext(filepath)
-        scrambled_name = scramble(name)
-        new_filepath = os.path.join(output_dir, scrambled_name + ext)
+        scrambled_name = scramble(filepath.stem)
+        new_filepath = output_path / f"{scrambled_name}{filepath.suffix}"
         thumbnail = resize_image_to_fit(filepath, max_dimension)
         thumbnail.save(new_filepath)
 
 
 def rename_images(
-    csv_filename: str | os.PathLike[str],
+    csv_filename: Pathish,
     verbose: int = 1,
     dry_run: bool = False,
 ) -> None:
     """Rename images from metadata suggestions."""
-    metadata_df = pd.read_csv(csv_filename)
+    csv_path = Path(csv_filename)
+    metadata_df = pd.read_csv(csv_path)
     metadata_updated = False
-    display_directory = os.path.dirname(os.fspath(csv_filename)) or os.curdir
+    display_directory = csv_path.parent
     if verbose == 1:
         print(f"working in {quote_display_path(display_directory)}")
     for index, row in metadata_df.iterrows():
-        source = row["original_filepath"]
+        source = Path(row["original_filepath"])
 
         if row["status"] != "ok" or not row["clean_filename"]:
             if verbose >= 2:
@@ -570,16 +573,17 @@ def rename_images(
             continue
 
         # new filename
-        directory, _old_filename = os.path.split(source)
         new_filename = row["clean_filename"]
-        target = os.path.join(directory, new_filename)
+        target = source.with_name(new_filename)
 
         # old filename
-        if not os.path.isfile(source):
+        if not source.is_file():
             if verbose >= 2:
-                print(f"source file {source!r} is missing!")
-            if verbose >= 1 and not os.path.isfile(target):
-                print(f"both source file {source!r} and {target!r} are missing!")
+                print(f"source file {os.fspath(source)!r} is missing!")
+            if verbose >= 1 and not target.is_file():
+                print(
+                    f"both source file {os.fspath(source)!r} and {os.fspath(target)!r} are missing!"
+                )
             continue
 
         # check for no-op
@@ -589,22 +593,20 @@ def rename_images(
             continue
 
         # ensure extension matches
-        source_ext = os.path.splitext(source)[1]
-        target_base, target_ext = os.path.splitext(target)
-        if source_ext.lower() != target_ext.lower():
+        if source.suffix.lower() != target.suffix.lower():
             if verbose >= 1:
                 print(
-                    f"Mismatched file extensions between {source!r} and {target!r}; skipping rename!"
+                    f"Mismatched file extensions between {os.fspath(source)!r} and {os.fspath(target)!r}; skipping rename!"
                 )
             continue
 
         # check for name collisions
-        if os.path.isfile(target):
+        if target.is_file():
             if verbose >= 1:
-                print(f"target {target!r} already exists!")
-            target = make_unique(target)
+                print(f"target {os.fspath(target)!r} already exists!")
+            target = Path(make_unique(target))
             if verbose >= 1:
-                print(f"proceeding with target {target!r}.")
+                print(f"proceeding with target {os.fspath(target)!r}.")
 
         # actually perform the file rename
         if verbose >= 1:
@@ -617,8 +619,8 @@ def rename_images(
             print(f"renaming {display_source} to {display_target} ...", end="")
         try:
             if not dry_run:
-                os.rename(source, target)
-                target_filename = os.path.basename(target)
+                source.rename(target)
+                target_filename = target.name
                 if row["clean_filename"] != target_filename:
                     metadata_df.at[index, "clean_filename"] = target_filename
                     metadata_updated = True
@@ -628,67 +630,65 @@ def rename_images(
             if verbose >= 1:
                 print("error!")
             else:
-                print(f"error renaming {source!r} to {target!r}!")
+                print(f"error renaming {os.fspath(source)!r} to {os.fspath(target)!r}!")
             traceback.print_exc()
 
     if metadata_updated:
-        metadata_df.to_csv(csv_filename, index=False)
+        metadata_df.to_csv(csv_path, index=False)
 
 
 def shelve_images(
-    csv_filename: str | os.PathLike[str],
+    csv_filename: Pathish,
     verbose: int = 1,
     dry_run: bool = False,
 ) -> None:
     """Move images into category folders."""
-    metadata_df = pd.read_csv(csv_filename)
-    upload_directory = os.path.dirname(os.fspath(csv_filename)) or os.curdir
-    display_directory = os.path.dirname(upload_directory) or os.curdir
+    csv_path = Path(csv_filename)
+    metadata_df = pd.read_csv(csv_path)
+    upload_directory = csv_path.parent
+    display_directory = upload_directory.parent
     if verbose == 1:
         print(f"working in {quote_display_path(display_directory)}")
     for index, row in metadata_df.iterrows():
-        original_source = row["original_filepath"]
+        original_source = Path(row["original_filepath"])
 
         if row["status"] != "ok" or not row["category"]:
             if verbose >= 2:
                 print(f"skipping row {index} {original_source!r}")
             continue
 
-        source_directory = os.path.dirname(original_source)
         source_filename = row["clean_filename"] or row["original_filename"]
-        source = os.path.join(source_directory, source_filename)
-        if not os.path.isfile(source):
+        source = original_source.with_name(source_filename)
+        if not source.is_file():
             source = original_source
 
-        if not os.path.isfile(source):
+        if not source.is_file():
             if verbose >= 1:
-                print(f"source file {source!r} is missing!")
+                print(f"source file {os.fspath(source)!r} is missing!")
             continue
 
         category = str(row["category"]).strip()
-        target_directory = os.path.normpath(
-            os.path.join(source_directory, os.pardir, category)
-        )
-        if not os.path.isdir(target_directory):
+        target_directory = source.parent.parent / category
+        if not target_directory.is_dir():
             if verbose >= 1:
                 print(
-                    f"target directory {target_directory!r} is missing; skipping {source!r}"
+                    f"target directory {os.fspath(target_directory)!r} is missing; skipping {os.fspath(source)!r}"
                 )
             continue
 
-        target = os.path.join(target_directory, os.path.basename(source))
+        target = target_directory / source.name
 
         if target == source:
             if verbose >= 2:
                 print(f"no move necessary for {source!r}")
             continue
 
-        if os.path.isfile(target):
+        if target.is_file():
             if verbose >= 1:
-                print(f"target {target!r} already exists!")
-            target = make_unique(target)
+                print(f"target {os.fspath(target)!r} already exists!")
+            target = Path(make_unique(target))
             if verbose >= 1:
-                print(f"proceeding with target {target!r}.")
+                print(f"proceeding with target {os.fspath(target)!r}.")
 
         if verbose >= 1:
             display_source = display_path(
@@ -700,25 +700,25 @@ def shelve_images(
             print(f"moving {display_source} to {display_target} ...", end="")
         try:
             if not dry_run:
-                os.rename(source, target)
+                source.rename(target)
             if verbose >= 1:
                 print("success!")
         except Exception:
             if verbose >= 1:
                 print("error!")
             else:
-                print(f"error moving {source!r} to {target!r}!")
+                print(f"error moving {os.fspath(source)!r} to {os.fspath(target)!r}!")
             traceback.print_exc()
 
 
 def generate_gallery(
-    csv_filename: str | os.PathLike[str],
-    output_filename: str | os.PathLike[str],
+    csv_filename: Pathish,
+    output_filename: Pathish,
     verbose: int = 1,
 ) -> None:
     """Generate a static gallery HTML file."""
     # read the metadata and prepare for merge
-    metadata_df = pd.read_csv(csv_filename)
+    metadata_df = pd.read_csv(Path(csv_filename))
     metadata_df = metadata_df[metadata_df["status"] == "ok"]
     items = metadata_df.to_dict("records")
     first_item = items[0] if items else {}
@@ -741,5 +741,4 @@ def generate_gallery(
     output = template.render(items=items, provider_name=provider_name, model=model)
 
     # Save the rendered HTML to a file
-    with open(output_filename, "w", encoding="utf-8") as f:
-        f.write(output)
+    Path(output_filename).write_text(output, encoding="utf-8")
