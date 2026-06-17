@@ -34,6 +34,7 @@ CATEGORIES = [
 
 
 TEST_CLEAN_FILENAMES = {
+    "ai.jpg": "robot_portrait.jpg",
     "art.png": "picasso.png",
     "books.jpg": "library_book.jpg",
     "books_cover.jpg": "library_book.jpg",
@@ -43,10 +44,12 @@ TEST_CLEAN_FILENAMES = {
     "horror.jpg": "haunted_house.jpg",
     "memes.jpg": "office_meme.jpg",
     "photography.jpg": "city_street.jpg",
+    "vintage.tiff": "antique_camera.tiff",
 }
 
 
 TEST_CATEGORIES = {
+    "ai.jpg": "ai",
     "art.png": "art",
     "books.jpg": "books",
     "books_cover.jpg": "books",
@@ -56,7 +59,11 @@ TEST_CATEGORIES = {
     "horror.jpg": "horror",
     "memes.jpg": "memes",
     "photography.jpg": "photography",
+    "vintage.tiff": "vintage",
 }
+
+
+PROMPTS: list[str] = []
 
 
 class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
@@ -69,6 +76,7 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
         prompt: str,
         response_format: type[BaseModel],
     ) -> it.VisionTaskResult:
+        PROMPTS.append(prompt)
         filename = prompt.rsplit('Current filename: "', maxsplit=1)[1].split(
             '"', maxsplit=1
         )[0]
@@ -144,14 +152,31 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
 
     convert_stdout = run_cli("convert", str(uploads_dir))
     assert "Converted" in convert_stdout
+    assert "ai.jpeg" in convert_stdout
+    assert "ai.jpg" in convert_stdout
     assert "comics.bmp" in convert_stdout
     assert "comics2.jpg" in convert_stdout
-    assert convert_stdout.endswith(".jpg: 8\n.png: 1\n")
+    assert convert_stdout.endswith(".jpg: 9\n.png: 1\n.tiff: 1\n")
     assert sorted(
         path.suffix.lower() for path in uploads_dir.iterdir() if path.is_file()
-    ) == [".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".jpg", ".png"]
+    ) == [
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".jpg",
+        ".png",
+        ".tiff",
+    ]
+    assert (uploads_dir / "ai.jpg").exists()
+    assert not (uploads_dir / "ai.jpeg").exists()
     assert (uploads_dir / "comics.jpg").exists()
     assert (uploads_dir / "comics2.jpg").exists()
+    assert (uploads_dir / "vintage.tiff").exists()
     assert all(
         path.suffix.lower() in WELCOME_EXTENSIONS
         for path in uploads_dir.iterdir()
@@ -159,11 +184,11 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     )
 
     tag_stdout = run_tag(uploads_dir, "-q")
-    assert tag_stdout == "number of image files to tag: 9\n........."
+    assert tag_stdout == "number of image files to tag: 11\n..........."
 
     with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
         rows = list(csv.DictReader(metadata_file))
-    assert len(rows) == 9
+    assert len(rows) == 11
     assert {row["status"] for row in rows} == {"ok"}
     clean_filenames = {row["original_filename"]: row["clean_filename"] for row in rows}
     assert clean_filenames == TEST_CLEAN_FILENAMES
@@ -172,10 +197,12 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert "renaming" in rename_stdout
     assert "success!" in rename_stdout
     assert (uploads_dir / "picasso.png").exists()
+    assert (uploads_dir / "robot_portrait.jpg").exists()
     assert (uploads_dir / "library_book.jpg").exists()
     assert (uploads_dir / "library_book2.jpg").exists()
     assert (uploads_dir / "garfield.jpg").exists()
     assert (uploads_dir / "garfield2.jpg").exists()
+    assert (uploads_dir / "antique_camera.tiff").exists()
 
     gallery_stdout = run_cli(
         "gallery",
@@ -193,12 +220,14 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     shelve_stdout = run_cli("shelve", str(uploads_dir))
     assert "moving" in shelve_stdout
     assert "success!" in shelve_stdout
+    assert (workflow_workspace["root"] / "ai" / "robot_portrait.jpg").exists()
     assert (workflow_workspace["root"] / "art" / "picasso.png").exists()
     assert (workflow_workspace["root"] / "art" / "picasso2.png").exists()
     assert (workflow_workspace["root"] / "books" / "library_book.jpg").exists()
     assert (workflow_workspace["root"] / "books" / "library_book2.jpg").exists()
     assert (workflow_workspace["root"] / "comics" / "garfield.jpg").exists()
     assert (workflow_workspace["root"] / "comics" / "garfield2.jpg").exists()
+    assert (workflow_workspace["root"] / "vintage" / "antique_camera.tiff").exists()
     assert not (uploads_dir / "picasso.png").exists()
 
 
@@ -297,10 +326,95 @@ def test_make_unique_raises_after_suffix_nine(
         make_unique(tmp_path / "image.jpg")
 
 
+def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
+    tmp_path: Path,
+    run_cli,
+) -> None:
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    source = uploads_dir / "image 234.jpg"
+    source.touch()
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(source),
+                "original_filename": source.name,
+                "clean_filename": "handwritten_note.jpg",
+            }
+        )
+
+    output = run_cli("rename", str(uploads_dir))
+
+    assert output.splitlines()[0] == f"working in {it.quote_display_path(uploads_dir)}"
+    assert 'renaming "image 234.jpg" to handwritten_note.jpg ...success!' in output
+
+
+def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
+    tmp_path: Path,
+    run_cli,
+) -> None:
+    uploads_dir = tmp_path / "uploads"
+    diagrams_dir = tmp_path / "diagrams"
+    uploads_dir.mkdir()
+    diagrams_dir.mkdir()
+    source = uploads_dir / "handwritten_note.jpg"
+    source.touch()
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "category": "diagrams",
+                "original_filepath": str(source),
+                "original_filename": source.name,
+                "clean_filename": source.name,
+            }
+        )
+
+    output = run_cli("shelve", str(uploads_dir))
+
+    assert output.splitlines()[0] == f"working in {it.quote_display_path(tmp_path)}"
+    assert (
+        "moving uploads/handwritten_note.jpg to diagrams/handwritten_note.jpg ...success!"
+        in output
+    )
+
+
+def test_rename_verbosity_two_prints_full_quoted_paths(tmp_path: Path, run_cli) -> None:
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    source = uploads_dir / "My Mother's Photo.jpg"
+    source.touch()
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(source),
+                "original_filename": source.name,
+                "clean_filename": "family_photo.jpg",
+            }
+        )
+
+    output = run_cli("rename", str(uploads_dir), "-v")
+
+    assert output.startswith(
+        f"renaming {it.quote_display_path(source)} to {it.quote_display_path(uploads_dir / 'family_photo.jpg')} ...success!"
+    )
+
+
 @pytest.mark.parametrize(
     ("verbosity_args", "expected"),
     [
-        (("-q",), "number of image files to tag: 9\n........."),
+        (("-q",), "number of image files to tag: 11\n..........."),
         ((), "books.jpg -> library_book.jpg"),
         (("-v",), "'original_filename': 'books.jpg'"),
     ],
@@ -320,3 +434,25 @@ def test_tag_verbosity_zero_one_and_two(
     output = run_tag(uploads_dir, *verbosity_args)
 
     assert expected in output
+
+
+def test_tag_allows_instructions_filename_override(
+    tmp_path: Path,
+    run_cli,
+    run_tag,
+    workflow_workspace: dict[str, Path],
+) -> None:
+    uploads_dir = tmp_path / "instructions_uploads"
+    shutil.copytree(workflow_workspace["uploads"], uploads_dir)
+    run_cli("convert", str(uploads_dir))
+    instructions_filename = tmp_path / "instructions.md"
+    instructions_filename.write_text(
+        'Custom tagging instructions.\n\nCurrent filename: "{filename}"\n',
+        encoding="utf-8",
+    )
+    PROMPTS.clear()
+
+    run_tag(uploads_dir, "-q", "--instructions-filename", str(instructions_filename))
+
+    assert PROMPTS
+    assert all(prompt.startswith("Custom tagging instructions.") for prompt in PROMPTS)

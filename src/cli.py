@@ -53,6 +53,7 @@ def tag_uploads(args: argparse.Namespace) -> None:
         retry_errors=args.retry_errors,
         verbose=args.verbose,
         provider=args.provider,
+        instructions_filename=args.instructions_filename,
     )
 
 
@@ -161,6 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     tag_parser.add_argument(
         "--extensions", type=extensions_arg, default=WELCOME_EXTENSIONS
     )
+    tag_parser.add_argument("--instructions-filename", type=path_arg)
     tag_parser.add_argument("--retry-errors", action="store_true")
     tag_parser.set_defaults(func=tag_uploads)
 

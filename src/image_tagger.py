@@ -2,6 +2,7 @@ import os
 import re
 import json
 import base64
+import subprocess
 from urllib.parse import urlsplit
 from io import BytesIO
 import time
@@ -58,6 +59,23 @@ csv_columns = [
     "tags",
     "description",
 ]
+
+
+def quote_display_path(path: str | os.PathLike[str]) -> str:
+    return subprocess.list2cmdline([os.fspath(path)])
+
+
+def display_path(
+    path: str | os.PathLike[str],
+    *,
+    verbose: int,
+    relative_to: str | os.PathLike[str],
+) -> str:
+    display = os.fspath(path)
+    if verbose == 1:
+        display = os.path.relpath(display, os.fspath(relative_to))
+        display = display.replace(os.sep, "/")
+    return quote_display_path(display)
 
 
 class VisionModelProvider(Enum):
@@ -307,6 +325,7 @@ def base64_encode_image(image: Image.Image | Pathish) -> str:
 def tag_image(
     filepath: str,
     client_adapter: VisionModelClientAdapter,
+    prompt_template: str = IMAGE_PROMPT_TEMPLATE,
 ) -> dict[str, Any]:
     # handle local or remote images
     if filepath.startswith("http"):
@@ -321,7 +340,7 @@ def tag_image(
 
     base64_image_data = base64_encode_image(image)
 
-    prompt = IMAGE_PROMPT_TEMPLATE.format(filename=filename)
+    prompt = prompt_template.format(filename=filename)
     vision_start_time = time.perf_counter()
     response = client_adapter.vision_task(base64_image_data, prompt, ImageTagData)
     vision_duration = time.perf_counter() - vision_start_time
@@ -354,8 +373,14 @@ def tag_images(
     retry_errors: bool = False,
     verbose: int = 1,
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
+    instructions_filename: str | os.PathLike[str] | None = None,
 ) -> None:
     client_adapter = get_vision_model_client_adapter(provider)
+    if instructions_filename is None:
+        prompt_template = IMAGE_PROMPT_TEMPLATE
+    else:
+        with open(instructions_filename, "r", encoding="utf-8") as instructions_file:
+            prompt_template = instructions_file.read()
     if verbose >= 1:
         print(f"Using {client_adapter}")
     file_already_exists = os.path.exists(output_filename)
@@ -374,7 +399,7 @@ def tag_images(
                 row_start_time = time.perf_counter()
 
                 try:
-                    row = tag_image(filepath, client_adapter)
+                    row = tag_image(filepath, client_adapter, prompt_template)
                     duration = row.pop("vision_duration")
                     vision_durations.append(duration)
                     row["tags"] = ";".join(tag.lower().strip() for tag in row["tags"])
@@ -516,6 +541,9 @@ def rename_images(
 ) -> None:
     metadata_df = pd.read_csv(csv_filename)
     metadata_updated = False
+    display_directory = os.path.dirname(os.fspath(csv_filename)) or os.curdir
+    if verbose == 1:
+        print(f"working in {quote_display_path(display_directory)}")
     for index, row in metadata_df.iterrows():
         source = row["original_filepath"]
 
@@ -563,7 +591,13 @@ def rename_images(
 
         # actually perform the file rename
         if verbose >= 1:
-            print(f"renaming {source!r} to {target!r}...", end="")
+            display_source = display_path(
+                source, verbose=verbose, relative_to=display_directory
+            )
+            display_target = display_path(
+                target, verbose=verbose, relative_to=display_directory
+            )
+            print(f"renaming {display_source} to {display_target} ...", end="")
         try:
             if not dry_run:
                 os.rename(source, target)
@@ -590,6 +624,10 @@ def shelve_images(
     dry_run: bool = False,
 ) -> None:
     metadata_df = pd.read_csv(csv_filename)
+    upload_directory = os.path.dirname(os.fspath(csv_filename)) or os.curdir
+    display_directory = os.path.dirname(upload_directory) or os.curdir
+    if verbose == 1:
+        print(f"working in {quote_display_path(display_directory)}")
     for index, row in metadata_df.iterrows():
         original_source = row["original_filepath"]
 
@@ -635,7 +673,13 @@ def shelve_images(
                 print(f"proceeding with target {target!r}.")
 
         if verbose >= 1:
-            print(f"moving {source!r} to {target!r}...", end="")
+            display_source = display_path(
+                source, verbose=verbose, relative_to=display_directory
+            )
+            display_target = display_path(
+                target, verbose=verbose, relative_to=display_directory
+            )
+            print(f"moving {display_source} to {display_target} ...", end="")
         try:
             if not dry_run:
                 os.rename(source, target)

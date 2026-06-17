@@ -43,6 +43,14 @@ Extra CLI arguments can be passed after `--`, for example:
 just tag -- -v --provider openai --extensions "jpg, png; gif"
 ```
 
+To override the default tagging instructions, pass a Markdown file containing
+the prompt template. The template should include `{filename}` where the current
+filename should be inserted:
+
+```powershell
+just tag -- --instructions-filename instructions.md
+```
+
 Supported vision model providers are:
 
 | Provider | Model |
@@ -80,7 +88,7 @@ it.generate_gallery(metadata_filename, gallery_filename)
 ```
 
 to generate a static `index.html` file which shows each image listed in
-`metadata.csv` side-by-side with its inferred metadata. The gallery also has a
+`image_metadata.csv` side-by-side with its inferred metadata. The gallery also has a
 simple local search feature to demonstrate how the inferred metadata enables
 better image searching.
 
@@ -128,8 +136,10 @@ filenames and some summary visualizations.
 
 The main
 [`image_tagger.py`](https://github.com/olooney/image_tagger/blob/main/src/image_tagger.py)
-contains all of the relevant Python code. The variable
-`NAME_IMAGE_PROMPT_TEMPLATE` holds the prompt used to instruct the vision model about
-which metadata to generate and `csv_columns` contains the names and order of
-the columns of the generated `metadata.csv` file. Editing those two variables
-is the easiest way to customize the behavior of the entire project.
+contains the core tagging, renaming, shelving, and gallery code. The default
+vision-model instructions live in
+[`image_prompt.md`](https://github.com/olooney/image_tagger/blob/main/src/image_tagger_data/image_prompt.md)
+and are loaded as `IMAGE_PROMPT_TEMPLATE`. Pass `--instructions-filename` on
+the CLI, or `instructions_filename` from Python, to use a different prompt
+template without editing the package data. The `csv_columns` variable contains
+the names and order of the columns of the generated `image_metadata.csv` file.
