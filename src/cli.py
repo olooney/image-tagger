@@ -12,7 +12,7 @@ from convert import (
     normalize_image_extensions,
     rename_jpeg_to_jpg,
 )
-from util import preview
+from util import preview, quote_display_path
 
 
 def path_arg(value: str) -> Path:
@@ -36,11 +36,14 @@ def extensions_arg(value: str) -> list[str]:
 def convert_uploads(args: argparse.Namespace) -> None:
     """Run upload conversion steps."""
     directory = args.directory
-    convert_images(directory, dry_run=args.dry_run)
-    delete_duplicate_images(directory, dry_run=args.dry_run)
-    normalize_image_extensions(directory, dry_run=args.dry_run)
-    rename_jpeg_to_jpg(directory, dry_run=args.dry_run)
-    print(format_extension_counts(count_files_by_extension(directory)))
+    if args.verbose == 1:
+        print(f"working in {quote_display_path(directory)}")
+    convert_images(directory, dry_run=args.dry_run, verbose=args.verbose)
+    delete_duplicate_images(directory, dry_run=args.dry_run, verbose=args.verbose)
+    normalize_image_extensions(directory, dry_run=args.dry_run, verbose=args.verbose)
+    rename_jpeg_to_jpg(directory, dry_run=args.dry_run, verbose=args.verbose)
+    if args.verbose >= 1:
+        print(format_extension_counts(count_files_by_extension(directory)))
 
 
 def tag_uploads(args: argparse.Namespace) -> None:

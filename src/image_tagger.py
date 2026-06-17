@@ -5,7 +5,6 @@ import os
 import random
 import re
 import string
-import subprocess
 import time
 import traceback
 from abc import ABC, abstractmethod
@@ -26,7 +25,14 @@ from PIL import Image
 from pydantic import BaseModel
 
 from constants import WELCOME_EXTENSIONS
-from util import Pathish, TemporarySeed, connect_to_openai, make_unique
+from util import (
+    Pathish,
+    TemporarySeed,
+    connect_to_openai,
+    display_file_operation,
+    make_unique,
+    quote_display_path,
+)
 
 
 class ImageTagData(BaseModel):
@@ -62,26 +68,6 @@ csv_columns: list[str] = [
     "tags",
     "description",
 ]
-
-
-def quote_display_path(path: Pathish) -> str:
-    """Quote a path for command-line display."""
-    return subprocess.list2cmdline([os.fspath(path)])
-
-
-def display_path(
-    path: Pathish,
-    *,
-    verbose: int,
-    relative_to: Pathish,
-) -> str:
-    """Format a path for verbose output."""
-    display_path = Path(path)
-    if verbose == 1:
-        display = display_path.relative_to(relative_to).as_posix()
-    else:
-        display = os.fspath(display_path)
-    return quote_display_path(display)
 
 
 class VisionModelProvider(Enum):
@@ -610,13 +596,16 @@ def rename_images(
 
         # actually perform the file rename
         if verbose >= 1:
-            display_source = display_path(
-                source, verbose=verbose, relative_to=display_directory
+            print(
+                display_file_operation(
+                    "renaming",
+                    source,
+                    target,
+                    verbose=verbose,
+                    relative_to=display_directory,
+                ),
+                end="",
             )
-            display_target = display_path(
-                target, verbose=verbose, relative_to=display_directory
-            )
-            print(f"renaming {display_source} to {display_target} ...", end="")
         try:
             if not dry_run:
                 source.rename(target)
@@ -691,13 +680,16 @@ def shelve_images(
                 print(f"proceeding with target {os.fspath(target)!r}.")
 
         if verbose >= 1:
-            display_source = display_path(
-                source, verbose=verbose, relative_to=display_directory
+            print(
+                display_file_operation(
+                    "moving",
+                    source,
+                    target,
+                    verbose=verbose,
+                    relative_to=display_directory,
+                ),
+                end="",
             )
-            display_target = display_path(
-                target, verbose=verbose, relative_to=display_directory
-            )
-            print(f"moving {display_source} to {display_target} ...", end="")
         try:
             if not dry_run:
                 source.rename(target)

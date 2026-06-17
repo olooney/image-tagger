@@ -58,6 +58,38 @@ def preview(html_path: Pathish) -> None:
         webbrowser.open(html_uri)
 
 
+def quote_display_path(path: Pathish) -> str:
+    """Quote a path for command-line display."""
+    return subprocess.list2cmdline([os.fspath(path)])
+
+
+def display_path(
+    path: Pathish,
+    *,
+    verbose: int,
+    relative_to: Pathish,
+) -> str:
+    """Format a path for verbose output."""
+    display_path = Path(path)
+    if verbose == 1:
+        display = display_path.relative_to(relative_to).as_posix()
+    else:
+        display = os.fspath(display_path)
+    return quote_display_path(display)
+
+
+def display_file_operation(
+    action: str,
+    source: Pathish,
+    target: Pathish,
+    *,
+    verbose: int,
+    relative_to: Pathish,
+) -> str:
+    """Format a source-to-target file operation."""
+    return f"{action} {display_path(source, verbose=verbose, relative_to=relative_to)} to {display_path(target, verbose=verbose, relative_to=relative_to)} ..."
+
+
 def make_unique(path: Pathish) -> str:
     """Return an available path by adding suffixes."""
     path = Path(path)

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 import cli
 import image_tagger as it
 from constants import WELCOME_EXTENSIONS
-from util import make_unique
+from util import make_unique, quote_display_path
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 
@@ -168,7 +168,11 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     gallery_filename = workflow_workspace["gallery"]
 
     convert_stdout = run_cli("convert", str(uploads_dir))
-    assert "Converted" in convert_stdout
+    assert (
+        convert_stdout.splitlines()[0]
+        == f"working in {quote_display_path(uploads_dir)}"
+    )
+    assert "converting" in convert_stdout
     assert "ai.jpeg" in convert_stdout
     assert "ai.jpg" in convert_stdout
     assert "comics.bmp" in convert_stdout
@@ -371,7 +375,7 @@ def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
 
     output = run_cli("rename", str(uploads_dir))
 
-    assert output.splitlines()[0] == f"working in {it.quote_display_path(uploads_dir)}"
+    assert output.splitlines()[0] == f"working in {quote_display_path(uploads_dir)}"
     assert 'renaming "image 234.jpg" to handwritten_note.jpg ...success!' in output
 
 
@@ -402,7 +406,7 @@ def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
 
     output = run_cli("shelve", str(uploads_dir))
 
-    assert output.splitlines()[0] == f"working in {it.quote_display_path(tmp_path)}"
+    assert output.splitlines()[0] == f"working in {quote_display_path(tmp_path)}"
     assert (
         "moving uploads/handwritten_note.jpg to diagrams/handwritten_note.jpg ...success!"
         in output
@@ -434,7 +438,42 @@ def test_rename_verbosity_two_prints_full_quoted_paths(
     output = run_cli("rename", str(uploads_dir), "-v")
 
     assert output.startswith(
-        f"renaming {it.quote_display_path(source)} to {it.quote_display_path(uploads_dir / 'family_photo.jpg')} ...success!"
+        f"renaming {quote_display_path(source)} to {quote_display_path(uploads_dir / 'family_photo.jpg')} ...success!"
+    )
+
+
+def test_convert_verbosity_one_prints_working_folder_and_relative_paths(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+    workflow_workspace: dict[str, Path],
+) -> None:
+    """Show relative convert paths at default verbosity."""
+    uploads_dir = tmp_path / "convert_uploads"
+    shutil.copytree(workflow_workspace["uploads"], uploads_dir)
+
+    output = run_cli("convert", str(uploads_dir))
+
+    assert output.splitlines()[0] == f"working in {quote_display_path(uploads_dir)}"
+    assert "converting comics.bmp to comics.jpg ...success!" in output
+    assert "renaming ai.jpeg to ai.jpg ...success!" in output
+    assert str(uploads_dir) not in output.splitlines()[1]
+
+
+def test_convert_verbosity_two_prints_full_quoted_paths(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+    workflow_workspace: dict[str, Path],
+) -> None:
+    """Show full convert paths at higher verbosity."""
+    uploads_dir = tmp_path / "convert uploads"
+    shutil.copytree(workflow_workspace["uploads"], uploads_dir)
+    source = uploads_dir / "comics.bmp"
+    target = uploads_dir / "comics.jpg"
+
+    output = run_cli("convert", str(uploads_dir), "-v")
+
+    assert output.startswith(
+        f"converting {quote_display_path(source)} to {quote_display_path(target)} ...success!"
     )
 
 

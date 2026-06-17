@@ -8,7 +8,7 @@ from PIL import Image
 from pillow_heif import register_heif_opener
 
 from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS, UPLOAD_DIR
-from util import Pathish, make_unique
+from util import Pathish, display_file_operation, make_unique, quote_display_path
 
 register_heif_opener()
 
@@ -58,26 +58,46 @@ def convert_images(
     output_format: str = "JPEG",
     output_extension: str = ".jpg",
     dry_run: bool = False,
+    verbose: int = 1,
 ) -> None:
     """Convert unwelcome image formats to a target format."""
+    display_directory = Path(directory)
     for filename in list_images(directory):
         if filename.suffix.lower() in input_extensions:
             # choose a collision-free output filename
             output_filename = Path(make_unique(filename.with_suffix(output_extension)))
 
-            # rewrite the image unless this is a dry run
-            if not dry_run:
-                with Image.open(filename) as img:
-                    img.convert("RGB").save(output_filename, output_format)
-            print(f"Converted {filename} to {output_filename}")
+            if verbose >= 1:
+                print(
+                    display_file_operation(
+                        "converting",
+                        filename,
+                        output_filename,
+                        verbose=verbose,
+                        relative_to=display_directory,
+                    ),
+                    end="",
+                )
+            try:
+                if not dry_run:
+                    with Image.open(filename) as img:
+                        img.convert("RGB").save(output_filename, output_format)
+                if verbose >= 1:
+                    print("success!")
+            except Exception:
+                if verbose >= 1:
+                    print("error!")
+                raise
 
 
 def delete_duplicate_images(
     directory: Pathish,
     input_extensions: Sequence[str] = UNWELCOME_EXTENSIONS,
     dry_run: bool = False,
+    verbose: int = 1,
 ) -> None:
     """Remove unwelcome duplicates when welcome copies exist."""
+    display_directory = Path(directory)
     dupes = find_duplicate_basenames(directory)
     for base, exts in dupes.items():
         welcome_exts = [ext for ext in exts if (ext not in input_extensions)]
@@ -86,25 +106,59 @@ def delete_duplicate_images(
             for ext in exts:
                 if ext in input_extensions:
                     unwelcome_filename = base.with_suffix(ext)
-                    if not dry_run:
-                        unwelcome_filename.unlink()
-                    print(
-                        f"removed duplicate file {unwelcome_filename} (retaining {welcome_filename})"
-                    )
+                    if verbose >= 1:
+                        print(
+                            display_file_operation(
+                                "removing duplicate",
+                                unwelcome_filename,
+                                welcome_filename,
+                                verbose=verbose,
+                                relative_to=display_directory,
+                            ),
+                            end="",
+                        )
+                    try:
+                        if not dry_run:
+                            unwelcome_filename.unlink()
+                        if verbose >= 1:
+                            print("success!")
+                    except Exception:
+                        if verbose >= 1:
+                            print("error!")
+                        raise
 
 
 def normalize_image_extensions(
     directory: Pathish,
     dry_run: bool = False,
+    verbose: int = 1,
 ) -> None:
     """Lowercase supported image extensions."""
+    display_directory = Path(directory)
     for filename in list_images(directory):
         if filename.suffix.lower() in IMAGE_EXTENSIONS:
             new_file = filename.with_suffix(filename.suffix.lower())
             if filename != new_file:
-                if not dry_run:
-                    filename.rename(new_file)
-                print(f"Renamed '{filename}' to '{new_file}'")
+                if verbose >= 1:
+                    print(
+                        display_file_operation(
+                            "renaming",
+                            filename,
+                            new_file,
+                            verbose=verbose,
+                            relative_to=display_directory,
+                        ),
+                        end="",
+                    )
+                try:
+                    if not dry_run:
+                        filename.rename(new_file)
+                    if verbose >= 1:
+                        print("success!")
+                except Exception:
+                    if verbose >= 1:
+                        print("error!")
+                    raise
 
 
 def count_files_by_extension(directory: Pathish) -> dict[str, int]:
@@ -129,27 +183,50 @@ def format_extension_counts(extension_counts: dict[str, int]) -> str:
 def rename_jpeg_to_jpg(
     directory: Pathish,
     dry_run: bool = False,
+    verbose: int = 1,
 ) -> None:
     """Rename .jpeg files to .jpg."""
+    display_directory = Path(directory)
     for filename in list_images(directory):
         if filename.suffix.lower() == ".jpeg":
             new_file = filename.with_suffix(".jpg")
-            if not dry_run:
-                filename.rename(new_file)
-            print(f"Renamed '{filename}' to '{new_file}'")
+            if verbose >= 1:
+                print(
+                    display_file_operation(
+                        "renaming",
+                        filename,
+                        new_file,
+                        verbose=verbose,
+                        relative_to=display_directory,
+                    ),
+                    end="",
+                )
+            try:
+                if not dry_run:
+                    filename.rename(new_file)
+                if verbose >= 1:
+                    print("success!")
+            except Exception:
+                if verbose >= 1:
+                    print("error!")
+                raise
 
 
 def main(
     directory: Path,
     dry_run: bool = False,
+    verbose: int = 1,
 ) -> None:
     """Run the full conversion workflow."""
+    if verbose == 1:
+        print(f"working in {quote_display_path(directory)}")
     find_duplicate_basenames(directory)
-    convert_images(directory, dry_run=dry_run)
-    delete_duplicate_images(directory, dry_run=dry_run)
-    normalize_image_extensions(directory, dry_run=dry_run)
-    rename_jpeg_to_jpg(directory, dry_run=dry_run)
-    print(format_extension_counts(count_files_by_extension(directory)))
+    convert_images(directory, dry_run=dry_run, verbose=verbose)
+    delete_duplicate_images(directory, dry_run=dry_run, verbose=verbose)
+    normalize_image_extensions(directory, dry_run=dry_run, verbose=verbose)
+    rename_jpeg_to_jpg(directory, dry_run=dry_run, verbose=verbose)
+    if verbose >= 1:
+        print(format_extension_counts(count_files_by_extension(directory)))
 
 
 if __name__ == "__main__":
