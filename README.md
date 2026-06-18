@@ -10,6 +10,9 @@ description.
 
 Rename arbitrary image filenames to clean, human-readable filenames.
 
+Normalize upload image formats, correcting mismatched extensions and converting
+lossless or uncompressed formats to PNG and lossy formats to JPEG.
+
 Prepare a static HTML gallery of images and metadata.
 
 Move tagged images into sibling category directories.
@@ -34,6 +37,11 @@ just rename [DIRECTORY]
 just gallery [DIRECTORY]
 just shelve [DIRECTORY]
 ```
+
+`just convert` prepares uploads for tagging. It corrects image extensions when
+the file contents do not match the name, converts lossless or uncompressed
+formats such as BMP and GIF to PNG, converts lossy formats such as WEBP, AVIF,
+and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
 If `DIRECTORY` is omitted, the tools use the configured uploads folder. By
 default, metadata is written to `image_metadata.csv` inside that directory.
