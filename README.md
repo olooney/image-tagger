@@ -17,6 +17,11 @@ Prepare a static HTML gallery of images and metadata.
 
 Move tagged images into sibling category directories.
 
+Sample Gallery
+--------------
+
+View a sample [Art Gallery](https://olooney.github.io/image-tagger/gallery3/index.html) tagged with GPT-5.4.
+
 
 Usage
 -----
@@ -108,12 +113,7 @@ it.shelve_images(metadata_filename, verbose=1, dry_run=False)
 ```
 
 
-Sample Gallery
---------------
 
-View a sample [Image Tagger Gallery](https://olooney.github.io/image_tagger/gallery/index.html).
-
-Or a newer [Art Gallery](https://olooney.github.io/image_tagger/gallery3/index.html) tagged with GPT-5.4.
 
 For this sample gallery, I added a "notes" column with manual annotations to
 document where it did notably well or poorly, or where its behavior is notably
@@ -138,15 +138,15 @@ prompts hidden within images.
 Source
 ------
 
-This [Jupyter notebook](https://github.com/olooney/image_tagger/blob/main/notebooks/Image%20Tagger%20Test.ipynb)
+This [Jupyter notebook](https://github.com/olooney/image-tagger/blob/main/notebooks/Image%20Tagger%20Test.ipynb)
 contains an example of use, including generating test images by scrambling
 filenames and some summary visualizations.
 
 The main
-[`image_tagger.py`](https://github.com/olooney/image_tagger/blob/main/src/image_tagger.py)
+[`image_tagger.py`](https://github.com/olooney/image-tagger/blob/main/src/image_tagger.py)
 contains the core tagging, renaming, shelving, and gallery code. The default
 vision-model instructions live in
-[`image_prompt.md`](https://github.com/olooney/image_tagger/blob/main/src/image_tagger_data/image_prompt.md)
+[`image_prompt.md`](https://github.com/olooney/image-tagger/blob/main/src/image_tagger_data/image_prompt.md)
 and are loaded as `IMAGE_PROMPT_TEMPLATE`. Pass `--instructions-filename` on
 the CLI, or `instructions_filename` from Python, to use a different prompt
 template without editing the package data. The `csv_columns` variable contains
