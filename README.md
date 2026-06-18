@@ -112,29 +112,6 @@ create those directories first and run:
 it.shelve_images(metadata_filename, verbose=1, dry_run=False)
 ```
 
-
-
-
-For this sample gallery, I added a "notes" column with manual annotations to
-document where it did notably well or poorly, or where its behavior is notably
-different from the earlier gpt-4v.
-
-The images in this gallery mostly come from here:
-
-1. [ICM Quality Mix Vol. 57 - Modern Martyrs](https://imgur.com/gallery/icm-quality-mix-vol-57-modern-martyrs-zcEiD6A)
-2. [ICM Quality Mix Vol. 55 - Cooler Heads](https://imgur.com/gallery/icm-quality-mix-vol-55-cooler-heads-QQjYFFS)
-
-ICM is a project of [MetaPathos](https://imgur.com/user/MetaPathos/posts) and
-was chosen because it is an extremely diverse collection of images in
-different styles and often oblique humor or references which should challenge
-vision models.
-
-In addition to the ICM images, there were also a few dozen other test images I
-had previously used for gpt-4v. Most of these were chosen to exercise specific
-features such as occluded object detection or susceptibility to malicious
-prompts hidden within images.
-
-
 Source
 ------
 
@@ -151,3 +128,22 @@ and are loaded as `IMAGE_PROMPT_TEMPLATE`. Pass `--instructions-filename` on
 the CLI, or `instructions_filename` from Python, to use a different prompt
 template without editing the package data. The `csv_columns` variable contains
 the names and order of the columns of the generated `image_metadata.csv` file.
+
+Attribution
+-----------
+
+The images in the sample gallery mostly come from here:
+
+1. [ICM Quality Mix Vol. 57 - Modern Martyrs](https://imgur.com/gallery/icm-quality-mix-vol-57-modern-martyrs-zcEiD6A)
+2. [ICM Quality Mix Vol. 55 - Cooler Heads](https://imgur.com/gallery/icm-quality-mix-vol-55-cooler-heads-QQjYFFS)
+
+ICM is a project of [MetaPathos](https://imgur.com/user/MetaPathos/posts) and
+was chosen because it is an extremely diverse collection of images in
+different styles and often oblique humor or references which should challenge
+vision models.
+
+In addition to the ICM images, there were also a few dozen other test images I
+had previously used for gpt-4v. Most of these were chosen to exercise specific
+features such as occluded object detection or susceptibility to malicious
+prompts hidden within images.
+
