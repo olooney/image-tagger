@@ -1,6 +1,7 @@
 Image Tagger
 ============
 
+A command line utility to use vision model to organize images.
 
 Features
 --------
@@ -17,21 +18,18 @@ Prepare a static HTML gallery of images and metadata.
 
 Move tagged images into sibling category directories.
 
+
 Sample Gallery
 --------------
 
 View a sample [Art Gallery](https://olooney.github.io/image-tagger/gallery3/index.html) tagged with GPT-5.4.
 
 
-Usage
------
+CLI Usage
+---------
 
-You will need to put your OpenAI API key in a file called
-`~/.openai/credentials.yaml` in this format:
-
-
-    organization: "YOUR ORG KEY HERE" # Test Project
-    api_key: "YOUR API KEY HERE"
+You will need to put your OpenAI API key in the usual `OPENAI_API_KEY`
+environment variable.
 
 The upload workflow is available through `just` tasks:
 
@@ -50,19 +48,9 @@ and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
 If `DIRECTORY` is omitted, the tools use the configured uploads folder. By
 default, metadata is written to `image_metadata.csv` inside that directory.
-Extra CLI arguments can be passed after `--`, for example:
 
-```powershell
-just tag -- -v --provider openai --extensions "jpg, png; gif"
-```
-
-To override the default tagging instructions, pass a Markdown file containing
-the prompt template. The template should include `{filename}` where the current
-filename should be inserted:
-
-```powershell
-just tag -- --instructions-filename instructions.md
-```
+Vision Models
+-------------
 
 Supported vision model providers are:
 
@@ -71,6 +59,9 @@ Supported vision model providers are:
 | `openai` | `gpt-5.4` |
 | `gemma` | `gemma4:e4b` via Ollama |
 | `qwen` | `qwen3.5:4b` via Ollama |
+
+Python API
+----------
 
 You can also generate an `image_metadata.csv` file for a given directory of
 images from Python like so:
@@ -105,8 +96,8 @@ to generate a static `index.html` file which shows each image listed in
 simple local search feature to demonstrate how the inferred metadata enables
 better image searching.
 
-To move renamed images into sibling category directories such as `../books/`,
-create those directories first and run:
+To move renamed images into sibling directories matching the tagged category 
+such as `../books/`, create those directories first and run:
 
 ```python
 it.shelve_images(metadata_filename, verbose=1, dry_run=False)
