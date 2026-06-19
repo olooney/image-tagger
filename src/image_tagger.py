@@ -109,7 +109,7 @@ class VisionModelClientAdapter(ABC):
     @abstractmethod
     def vision_task(
         self,
-        image_base64: str,
+        image_base64: str | list[str],
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
@@ -134,12 +134,21 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
 
     def vision_task(
         self,
-        image_base64: str,
+        image_base64: str | list[str],
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
         """Run an OpenAI vision request."""
-        url = f"data:image/png;base64,{image_base64}"
+        image_base64_values = (
+            [image_base64] if isinstance(image_base64, str) else image_base64
+        )
+        image_content = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_value}"},
+            }
+            for image_value in image_base64_values
+        ]
         response = self.client.beta.chat.completions.parse(
             model=self.model,
             response_format=response_format,
@@ -148,10 +157,7 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": url},
-                        },
+                        *image_content,
                     ],
                 },
             ],
@@ -185,18 +191,21 @@ class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
 
     def vision_task(
         self,
-        image_base64: str,
+        image_base64: str | list[str],
         prompt: str,
         response_format: type[BaseModel],
     ) -> VisionTaskResult:
         """Run an Ollama vision request."""
+        image_base64_values = (
+            [image_base64] if isinstance(image_base64, str) else image_base64
+        )
         response = self.client.chat(
             model=self.model,
             messages=[
                 {
                     "role": "user",
                     "content": prompt,
-                    "images": [image_base64],
+                    "images": image_base64_values,
                 },
             ],
             format=response_format.model_json_schema(),
@@ -485,7 +494,7 @@ def find_images(
     metadata_filename: Pathish | None = None,
     extension_filter: Iterable[str] | None = WELCOME_EXTENSIONS,
 ) -> list[Path]:
-    """Find untagged image files in directories."""
+    """Find untagged image files in directories recursively."""
     if max_days_old is None:
         max_days_old = float("Inf")
 
@@ -509,7 +518,7 @@ def find_images(
     filepaths: list[Path] = []
     for directory in directories:
         directory_path = Path(cast("Any", directory))
-        for filepath in directory_path.iterdir():
+        for filepath in directory_path.rglob("*"):
             if not filepath.is_file():
                 continue
             if (current_time - filepath.stat().st_mtime) >= max_days_old * 86400:

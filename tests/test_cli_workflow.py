@@ -78,7 +78,7 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
 
     def vision_task(
         self,
-        image_base64: str,
+        image_base64: str | list[str],
         prompt: str,
         response_format: type[BaseModel],
     ) -> it.VisionTaskResult:
@@ -325,6 +325,21 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "Mock description for books.jpg." in html
     assert "Keep this one." in html
     assert "This row should not render." not in html
+
+
+def test_find_images_recurses_into_subdirectories(tmp_path: Path) -> None:
+    """Find supported image files below nested directories."""
+    root_image = tmp_path / "root.jpg"
+    nested_dir = tmp_path / "art" / "paintings"
+    nested_dir.mkdir(parents=True)
+    nested_image = nested_dir / "nested.png"
+    ignored_text = nested_dir / "notes.txt"
+
+    root_image.touch()
+    nested_image.touch()
+    ignored_text.touch()
+
+    assert it.find_images(tmp_path) == [root_image, nested_image]
 
 
 def test_make_unique_returns_original_when_available(
