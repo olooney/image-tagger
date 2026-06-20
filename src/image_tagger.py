@@ -79,7 +79,7 @@ class VisionModelProvider(Enum):
 
 
 GEMMA_MODEL: str = "gemma4:e4b"
-OPENAI_MODEL: str = "gpt-5.4"
+OPENAI_MODEL: str = "gpt-5.5"
 QWEN_MODEL: str = "qwen3.5:4b"
 
 
