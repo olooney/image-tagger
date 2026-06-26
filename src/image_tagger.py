@@ -394,9 +394,9 @@ def tag_images(
     mode = "a" if file_already_exists else "w"
 
     try:
-        with output_path.open(mode, newline="", encoding="utf-8") as csvfile:
+        with output_path.open(mode, newline="", encoding="utf-8") as csv_file:
             columns = csv_columns
-            writer = csv.DictWriter(csvfile, fieldnames=columns)
+            writer = csv.DictWriter(csv_file, fieldnames=columns)
             if not file_already_exists:
                 writer.writeheader()
 
@@ -415,7 +415,7 @@ def tag_images(
                         {"timestamp": datetime.now().isoformat(), "status": "ok"}
                     )
                     writer.writerow(row)
-                    csvfile.flush()
+                    csv_file.flush()
 
                     if verbose == 0:
                         print(".", end=("\n" if (index + 1) % 100 == 0 else ""))
@@ -473,8 +473,8 @@ def previously_tagged_filenames(metadata_filename: Pathish) -> set[str]:
         return set()
 
     tagged_filenames: set[str] = set()
-    with metadata_path.open(newline="", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
+    with metadata_path.open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
         for row in reader:
             if row.get("status") != "ok":
                 continue
@@ -644,7 +644,7 @@ def generate_wall(
                 metadata_titles.get(filepath.name, filepath.name),
             ),
             "is_double_wide": aspect_ratios.get(filepath, aspect_ratio)
-            > 1.9 * aspect_ratio,
+            > 1.8 * aspect_ratio,
         }
         for filepath in filepaths
     ]
@@ -752,6 +752,40 @@ def rename_images(
         metadata_df.to_csv(csv_path, index=False)
 
 
+def append_shelved_metadata(
+    row: pd.Series[Any],
+    target: Path,
+    source_metadata_path: Path,
+) -> None:
+    """Append shelved image metadata to the target directory metadata file."""
+    target_metadata_path = target.parent / source_metadata_path.name
+    if not target_metadata_path.is_file():
+        return
+
+    target_metadata_df = pd.read_csv(target_metadata_path)
+    target_filenames = set()
+    for column in ["original_filename", "clean_filename"]:
+        if column in target_metadata_df:
+            target_filenames.update(
+                Path(value).name
+                for value in target_metadata_df[column].dropna()
+                if value
+            )
+    if target.name in target_filenames:
+        return
+
+    target_row = row.copy()
+    target_row["original_filepath"] = os.fspath(target)
+    target_row["original_filename"] = target.name
+    target_row["clean_filename"] = target.name
+    target_row.to_frame().T.to_csv(
+        target_metadata_path,
+        mode="a",
+        header=False,
+        index=False,
+    )
+
+
 def shelve_images(
     csv_filename: Pathish,
     verbose: int = 1,
@@ -819,6 +853,7 @@ def shelve_images(
         try:
             if not dry_run:
                 source.rename(target)
+                append_shelved_metadata(row, target, csv_path)
             if verbose >= 1:
                 print("success!")
         except Exception:

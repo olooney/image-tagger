@@ -556,6 +556,72 @@ def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
     )
 
 
+def test_shelve_appends_metadata_to_target_directory_after_unique_filename(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Copy shelved metadata to target metadata with the final filename."""
+    uploads_dir = tmp_path / "uploads"
+    books_dir = tmp_path / "books"
+    uploads_dir.mkdir()
+    books_dir.mkdir()
+    source = uploads_dir / "library_book.jpg"
+    source.touch()
+    (books_dir / "library_book.jpg").touch()
+
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-26T12:00:00",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(source),
+                "original_filename": source.name,
+                "width": "100",
+                "height": "100",
+                "category": "books",
+                "genre": "mock",
+                "filename": source.name,
+                "clean_filename": source.name,
+                "filename_already_makes_sense": "True",
+                "tags": "books;mock",
+                "description": "Mock description.",
+            }
+        )
+
+    target_metadata_filename = books_dir / "image_metadata.csv"
+    with target_metadata_filename.open(
+        "w", newline="", encoding="utf-8"
+    ) as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(books_dir / "library_book.jpg"),
+                "original_filename": "library_book.jpg",
+                "clean_filename": "library_book.jpg",
+            }
+        )
+
+    run_cli("shelve", str(uploads_dir))
+
+    assert (books_dir / "library_book2.jpg").exists()
+    with target_metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
+        rows = list(csv.DictReader(metadata_file))
+    assert len(rows) == 2
+    appended_row = rows[1]
+    assert appended_row["original_filepath"] == str(books_dir / "library_book2.jpg")
+    assert appended_row["original_filename"] == "library_book2.jpg"
+    assert appended_row["clean_filename"] == "library_book2.jpg"
+    assert appended_row["description"] == "Mock description."
+
+
 def test_rename_verbosity_two_prints_full_quoted_paths(
     tmp_path: Path,
     run_cli: Callable[..., str],
