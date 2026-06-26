@@ -275,6 +275,8 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     """Render expected gallery HTML from metadata."""
     metadata_filename = tmp_path / "image_metadata.csv"
     gallery_filename = tmp_path / "index.html"
+    (tmp_path / "books_books.jpg").touch()
+    (tmp_path / "fallback_original.jpg").touch()
     with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
         writer = csv.DictWriter(metadata_file, fieldnames=[*it.csv_columns, "notes"])
         writer.writeheader()
@@ -301,6 +303,48 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
         )
         writer.writerow(
             {
+                "timestamp": "2026-06-15T17:22:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(tmp_path / "fallback_original.jpg"),
+                "original_filename": "fallback_original.jpg",
+                "width": "20",
+                "height": "20",
+                "category": "books",
+                "genre": "mock",
+                "filename": "missing_clean.jpg",
+                "clean_filename": "missing_clean.jpg",
+                "filename_already_makes_sense": "False",
+                "tags": "books;mock;fallback",
+                "description": "Mock description for fallback_original.jpg.",
+                "notes": "",
+            }
+        )
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:23:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(tmp_path / "missing_original.jpg"),
+                "original_filename": "missing_original.jpg",
+                "width": "20",
+                "height": "20",
+                "category": "books",
+                "genre": "mock",
+                "filename": "missing_clean.jpg",
+                "clean_filename": "missing_clean.jpg",
+                "filename_already_makes_sense": "False",
+                "tags": "books;mock;missing",
+                "description": "This missing file should not render.",
+                "notes": "",
+            }
+        )
+        writer.writerow(
+            {
                 "timestamp": "2026-06-15T17:21:57.966360",
                 "status": "error",
                 "original_filename": "error.jpg",
@@ -316,14 +360,18 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "<title>Image Gallery</title>" in html
     assert "Mock (mock-vision) Image Annotation" in html
     assert 'id="searchInput"' in html
-    assert html.count('class="gallery-image row mb-4"') == 1
+    assert html.count('class="gallery-image row mb-4"') == 2
     assert '<img src="books_books.jpg" alt="Image" class="img-fluid">' in html
+    assert '<img src="fallback_original.jpg" alt="Image" class="img-fluid">' in html
     assert "06/15/26 05:20 PM" in html
     assert "<strong>Category:</strong> books" in html
     assert "<strong>Genre:</strong> mock" in html
     assert '<li class="tag-pill">library</li>' in html
+    assert '<li class="tag-pill">fallback</li>' in html
     assert "Mock description for books.jpg." in html
+    assert "Mock description for fallback_original.jpg." in html
     assert "Keep this one." in html
+    assert "This missing file should not render." not in html
     assert "This row should not render." not in html
 
 

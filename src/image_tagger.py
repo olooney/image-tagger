@@ -719,9 +719,30 @@ def generate_gallery(
 ) -> None:
     """Generate a static gallery HTML file."""
     # read the metadata and prepare for merge
-    metadata_df = pd.read_csv(Path(csv_filename))
+    csv_path = Path(csv_filename)
+    output_path = Path(output_filename)
+    metadata_df = pd.read_csv(csv_path)
     metadata_df = metadata_df[metadata_df["status"] == "ok"]
-    items = metadata_df.to_dict("records")
+    items: list[dict[str, Any]] = []
+    for item in metadata_df.to_dict("records"):
+        original_path = Path(item["original_filepath"])
+        clean_filename = item.get("clean_filename", "")
+        clean_path = (
+            original_path.with_name(clean_filename)
+            if clean_filename and isinstance(clean_filename, str)
+            else None
+        )
+        if clean_path is not None and clean_path.is_file():
+            image_path = clean_path
+        elif original_path.is_file():
+            image_path = original_path
+        else:
+            continue
+
+        image_src = os.path.relpath(image_path, output_path.parent)
+        item["image_src"] = Path(image_src).as_posix()
+        items.append(item)
+
     first_item = items[0] if items else {}
     provider_name = str(first_item.get("provider_name", "")).strip()
     model = str(first_item.get("model", "")).strip()
@@ -742,4 +763,4 @@ def generate_gallery(
     output = template.render(items=items, provider_name=provider_name, model=model)
 
     # Save the rendered HTML to a file
-    Path(output_filename).write_text(output, encoding="utf-8")
+    output_path.write_text(output, encoding="utf-8")
