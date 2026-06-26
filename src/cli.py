@@ -116,6 +116,18 @@ def gallery_uploads(args: argparse.Namespace) -> None:
         preview(args.output_filename)
 
 
+def wall_uploads(args: argparse.Namespace) -> None:
+    """Generate and optionally preview an image wall."""
+    output_filename = it.generate_wall(
+        args.directory,
+        args.output_filename,
+        metadata_filename=args.metadata_filename,
+        verbose=args.verbose,
+    )
+    if args.preview:
+        preview(output_filename)
+
+
 def clean_uploads(args: argparse.Namespace) -> None:
     """Remove generated workflow files."""
     for filename in [args.metadata_filename, args.output_filename]:
@@ -213,6 +225,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--preview", action=argparse.BooleanOptionalAction, default=True
     )
     gallery_parser.set_defaults(func=gallery_uploads)
+
+    wall_parser = subparsers.add_parser(
+        "wall", help="Generate a full-window image wall HTML page."
+    )
+    add_common_upload_args(wall_parser)
+    wall_parser.add_argument("--output-filename", type=path_arg)
+    wall_parser.add_argument(
+        "--preview", action=argparse.BooleanOptionalAction, default=True
+    )
+    wall_parser.set_defaults(func=wall_uploads)
 
     clean_parser = subparsers.add_parser(
         "clean", help="Remove generated metadata and gallery files."

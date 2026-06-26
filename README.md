@@ -38,6 +38,7 @@ just convert [DIRECTORY]
 just tag [DIRECTORY]
 just rename [DIRECTORY]
 just gallery [DIRECTORY]
+just wall [DIRECTORY]
 just shelve [DIRECTORY]
 ```
 
@@ -48,6 +49,11 @@ and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
 If `DIRECTORY` is omitted, the tools use the configured uploads folder. By
 default, metadata is written to `image_metadata.csv` inside that directory.
+
+`just wall` creates an `index.html` image wall directly from every supported image
+under `DIRECTORY`. It uses relative image paths, computes a median image aspect
+ratio up front, and displays the images in equal-sized grid cells with a
+click-to-open full-size overlay.
 
 Vision Models
 -------------

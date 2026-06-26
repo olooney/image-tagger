@@ -8,6 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from pydantic import BaseModel
 
 import cli
@@ -373,6 +374,66 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "Keep this one." in html
     assert "This missing file should not render." not in html
     assert "This row should not render." not in html
+
+
+def test_wall_cli_generates_regular_grid_with_relative_image_paths(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Render a standalone image wall from discovered images."""
+    uploads_dir = tmp_path / "uploads"
+    nested_dir = uploads_dir / "nested"
+    nested_dir.mkdir(parents=True)
+    square_filename = uploads_dir / "square.jpg"
+    Image.new("RGB", (100, 100)).save(square_filename)
+    Image.new("RGB", (200, 100)).save(nested_dir / "wide.png")
+    Image.new("RGB", (500, 100)).save(uploads_dir / "wider.jpg")
+    with (uploads_dir / "image_metadata.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(square_filename),
+                "original_filename": square_filename.name,
+                "width": "100",
+                "height": "100",
+                "clean_filename": square_filename.name,
+                "category": "books",
+                "genre": "mock",
+                "tags": "library;reference",
+                "description": "Mock description for square.jpg.",
+            }
+        )
+
+    output = run_cli("wall", str(uploads_dir), "--no-preview")
+
+    wall_filename = uploads_dir / "index.html"
+    html = wall_filename.read_text(encoding="utf-8")
+    assert output == f"wrote {quote_display_path(wall_filename)}\n"
+    assert wall_filename.exists()
+    assert html.startswith("<!doctype html>")
+    assert "--cell-width: 200px;" in html
+    assert "--cell-height: 100px;" in html
+    assert "grid-template-columns: repeat(auto-fill" in html
+    assert "grid-auto-rows: var(--cell-height);" in html
+    assert "object-fit: cover;" in html
+    assert "object-position: center top;" in html
+    assert "max-height: 100vh;" in html
+    assert 'class="tile double-wide"' in html
+    assert 'src="square.jpg"' in html
+    assert 'src="nested/wide.png"' in html
+    assert 'src="wider.jpg"' in html
+    assert 'title="square.jpg (100x100)' in html
+    assert 'Category: books' in html
+    assert 'Tags: library, reference' in html
+    assert 'Mock description for square.jpg.' in html
+    assert 'title="wider.jpg"' in html
+    assert str(uploads_dir) not in html
+    assert "lightbox.classList.add('is-open')" in html
+    assert "lightbox.classList.remove('is-open')" in html
 
 
 def test_find_images_recurses_into_subdirectories(tmp_path: Path) -> None:

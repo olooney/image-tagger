@@ -547,6 +547,123 @@ def scramble_image_directory(
         thumbnail.save(new_filepath)
 
 
+def median_image_aspect_ratio(filepaths: Iterable[Pathish]) -> float:
+    """Return the median width-to-height ratio for image files."""
+    aspect_ratios = image_aspect_ratios(filepaths)
+    return median_aspect_ratio(aspect_ratios.values())
+
+
+def median_aspect_ratio(aspect_ratios: Iterable[float]) -> float:
+    """Return the median aspect ratio from ratio values."""
+    sorted_aspect_ratios = sorted(aspect_ratios)
+
+    if not sorted_aspect_ratios:
+        return 1.0
+
+    midpoint = len(sorted_aspect_ratios) // 2
+    if len(sorted_aspect_ratios) % 2:
+        return sorted_aspect_ratios[midpoint]
+    return (sorted_aspect_ratios[midpoint - 1] + sorted_aspect_ratios[midpoint]) / 2
+
+
+def image_aspect_ratios(filepaths: Iterable[Pathish]) -> dict[Path, float]:
+    """Return width-to-height ratios keyed by image path."""
+    aspect_ratios: dict[Path, float] = {}
+    for filepath in filepaths:
+        image_path = Path(filepath)
+        with Image.open(image_path) as image:
+            width, height = image.size
+        if height > 0:
+            aspect_ratios[image_path] = width / height
+
+    return aspect_ratios
+
+WALL_TITLE_TEMPLATE = """{clean_filename} ({width}x{height})
+Category: {category}
+Genre: {genre}
+Tags: {tags}
+
+{description}
+"""
+
+
+def wall_metadata_titles(metadata_filename: Pathish | None) -> dict[str, str]:
+    """Return image metadata title text keyed by possible filenames."""
+    if metadata_filename is None:
+        return {}
+
+    metadata_path = Path(metadata_filename)
+    if not metadata_path.is_file():
+        return {}
+
+    metadata_df = pd.read_csv(metadata_path)
+    titles: dict[str, str] = {}
+    for raw_item in metadata_df.to_dict("records"):
+        item = cast("dict[str, Any]", raw_item)
+        if item.get("status") != "ok":
+            continue
+
+        item['tags'] = item['tags'].replace(";", ", ")
+        title = WALL_TITLE_TEMPLATE.format(**item)
+
+        if not title:
+            continue
+
+        for column in ["original_filepath", "original_filename", "clean_filename"]:
+            value = item.get(column, "")
+            if value and isinstance(value, str):
+                titles[Path(value).name] = title
+                titles[os.fspath(Path(value))] = title
+
+    return titles
+
+
+def generate_wall(
+    directory: Pathish,
+    output_filename: Pathish | None = None,
+    metadata_filename: Pathish | None = None,
+    verbose: int = 1,
+) -> Path:
+    """Generate a static image wall HTML file."""
+    directory_path = Path(directory)
+    output_path = (
+        Path(output_filename) if output_filename is not None else directory_path / "index.html"
+    )
+    filepaths = find_images(directory_path)
+    aspect_ratios = image_aspect_ratios(filepaths)
+    aspect_ratio = median_aspect_ratio(aspect_ratios.values())
+    cell_width = 200
+    cell_height = round(cell_width / aspect_ratio)
+    metadata_titles = wall_metadata_titles(metadata_filename)
+    items = [
+        {
+            "src": Path(os.path.relpath(filepath, output_path.parent)).as_posix(),
+            "alt": filepath.name,
+            "title": metadata_titles.get(
+                os.fspath(filepath),
+                metadata_titles.get(filepath.name, filepath.name),
+            ),
+            "is_double_wide": aspect_ratios.get(filepath, aspect_ratio)
+            > 1.9 * aspect_ratio,
+        }
+        for filepath in filepaths
+    ]
+
+    template_text = (
+        resources.files("image_tagger_data").joinpath("wall_template.html").read_text()
+    )
+    template = jinja2.Environment(autoescape=True).from_string(template_text)
+    output = template.render(
+        items=items,
+        cell_width=cell_width,
+        cell_height=cell_height,
+    )
+    output_path.write_text(output, encoding="utf-8")
+    if verbose >= 1:
+        print(f"wrote {quote_display_path(output_path)}")
+    return output_path
+
+
 def rename_images(
     csv_filename: Pathish,
     verbose: int = 1,
@@ -724,7 +841,8 @@ def generate_gallery(
     metadata_df = pd.read_csv(csv_path)
     metadata_df = metadata_df[metadata_df["status"] == "ok"]
     items: list[dict[str, Any]] = []
-    for item in metadata_df.to_dict("records"):
+    for raw_item in metadata_df.to_dict("records"):
+        item = cast("dict[str, Any]", raw_item)
         original_path = Path(item["original_filepath"])
         clean_filename = item.get("clean_filename", "")
         clean_path = (

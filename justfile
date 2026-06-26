@@ -20,6 +20,9 @@ shelve *args:
 gallery *args:
     {{python}} src/cli.py gallery {{args}}
 
+wall *args:
+    {{python}} src/cli.py wall {{args}}
+
 run: convert tag rename gallery
 
 # test tasks
