@@ -74,7 +74,9 @@
 <body>
     <main class="wall" aria-label="Image wall">
         {% for item in items %}
-            <button class="tile{% if item.is_double_wide %} double-wide{% endif %}" type="button"><img src="{{ item.src }}" alt="{{ item.alt }}" title="{{ item.title }}" loading="lazy"></button>
+            <button class="tile{% if item.is_double_wide %} double-wide{% endif %}" type="button">
+                <img src="{{ item.src }}" alt="{{ item.alt }}" title="{{ item.title }}" loading="lazy">
+            </button>
         {% endfor %}
     </main>
     <button class="lightbox" type="button" aria-label="Close full-size image">

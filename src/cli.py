@@ -122,6 +122,7 @@ def wall_uploads(args: argparse.Namespace) -> None:
         args.directory,
         args.output_filename,
         metadata_filename=args.metadata_filename,
+        order=args.order,
         verbose=args.verbose,
     )
     if args.preview:
@@ -231,6 +232,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_upload_args(wall_parser)
     wall_parser.add_argument("--output-filename", type=path_arg)
+    wall_parser.add_argument(
+        "--order",
+        choices=["name", "date", "random"],
+        default="name",
+        help="Order wall images by name, newest date first, or random shuffle.",
+    )
     wall_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True
     )

@@ -578,6 +578,11 @@ def image_aspect_ratios(filepaths: Iterable[Pathish]) -> dict[Path, float]:
 
     return aspect_ratios
 
+
+def paths_with_mtime(filepaths: Iterable[Pathish]) -> list[tuple[float, Path]]:
+    """Return file paths paired with their modification times."""
+    return [(Path(filepath).stat().st_mtime, Path(filepath)) for filepath in filepaths]
+
 WALL_TITLE_TEMPLATE = """{clean_filename} ({width}x{height})
 Category: {category}
 Genre: {genre}
@@ -622,6 +627,7 @@ def generate_wall(
     directory: Pathish,
     output_filename: Pathish | None = None,
     metadata_filename: Pathish | None = None,
+    order: str = "name",
     verbose: int = 1,
 ) -> Path:
     """Generate a static image wall HTML file."""
@@ -630,6 +636,17 @@ def generate_wall(
         Path(output_filename) if output_filename is not None else directory_path / "index.html"
     )
     filepaths = find_images(directory_path)
+    if order == "name":
+        filepaths.sort(key=lambda filepath: filepath.name.casefold())
+    elif order == "date":
+        filepaths = [
+            filepath
+            for _, filepath in sorted(paths_with_mtime(filepaths), reverse=True)
+        ]
+    elif order == "random":
+        random.shuffle(filepaths)
+    else:
+        raise ValueError(f"Unsupported wall order: {order}")
     aspect_ratios = image_aspect_ratios(filepaths)
     aspect_ratio = median_aspect_ratio(aspect_ratios.values())
     cell_width = 200

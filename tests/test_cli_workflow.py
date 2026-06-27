@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import shutil
 import sys
 from collections.abc import Callable
@@ -421,11 +422,13 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "grid-auto-rows: var(--cell-height);" in html
     assert "object-fit: cover;" in html
     assert "object-position: center top;" in html
-    assert "max-height: 100vh;" in html
+    assert "max-height: calc(100vh - 2vmin);" in html
     assert 'class="tile double-wide"' in html
     assert 'src="square.jpg"' in html
     assert 'src="nested/wide.png"' in html
     assert 'src="wider.jpg"' in html
+    assert html.index('src="square.jpg"') < html.index('src="nested/wide.png"')
+    assert html.index('src="nested/wide.png"') < html.index('src="wider.jpg"')
     assert 'title="square.jpg (100x100)' in html
     assert 'Category: books' in html
     assert 'Tags: library, reference' in html
@@ -434,6 +437,40 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert str(uploads_dir) not in html
     assert "lightbox.classList.add('is-open')" in html
     assert "lightbox.classList.remove('is-open')" in html
+
+
+def test_wall_cli_orders_images_by_date_newest_first(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Render the image wall with newest images first."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    older_filename = uploads_dir / "z-older.jpg"
+    newer_filename = uploads_dir / "a-newer.jpg"
+    Image.new("RGB", (100, 100)).save(older_filename)
+    Image.new("RGB", (100, 100)).save(newer_filename)
+    os.utime(older_filename, (100, 100))
+    os.utime(newer_filename, (200, 200))
+
+    run_cli("wall", str(uploads_dir), "--order", "date", "--no-preview")
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    assert html.index('src="a-newer.jpg"') < html.index('src="z-older.jpg"')
+
+
+def test_paths_with_mtime_accepts_iterators(tmp_path: Path) -> None:
+    """Pair iterable file paths with modification times."""
+    first_filename = tmp_path / "first.jpg"
+    second_filename = tmp_path / "second.jpg"
+    first_filename.touch()
+    second_filename.touch()
+    os.utime(first_filename, (300, 300))
+    os.utime(second_filename, (400, 400))
+
+    pairs = it.paths_with_mtime(iter([first_filename, second_filename]))
+
+    assert pairs == [(300, first_filename), (400, second_filename)]
 
 
 def test_find_images_recurses_into_subdirectories(tmp_path: Path) -> None:
