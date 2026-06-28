@@ -75,15 +75,17 @@ def list_images(directories: Pathish | Sequence[Pathish]) -> Iterator[Path]:
                 yield file
 
 
-def find_duplicate_basenames(directory: Pathish) -> dict[Path, list[str]]:
+def find_duplicate_basenames(directory: Pathish) -> dict[Path, list[Path]]:
     """Find image stems with multiple extensions."""
-    basenames: defaultdict[Path, list[str]] = defaultdict(list)
+    basenames: defaultdict[Path, list[Path]] = defaultdict(list)
 
     for filename in list_images(directory):
-        basenames[filename.with_suffix("")].append(filename.suffix)
+        basenames[filename.with_suffix("")].append(filename)
 
     duplicates = {
-        basename: exts for basename, exts in basenames.items() if len(exts) > 1
+        basename: filenames
+        for basename, filenames in basenames.items()
+        if len(filenames) > 1
     }
 
     return duplicates
@@ -221,13 +223,16 @@ def delete_duplicate_images(
     """Remove unwelcome duplicates when welcome copies exist."""
     display_directory = Path(directory)
     dupes = find_duplicate_basenames(directory)
-    for base, exts in dupes.items():
-        welcome_exts = [ext for ext in exts if (ext not in input_extensions)]
-        if welcome_exts:
-            welcome_filename = base.with_suffix(welcome_exts[0])
-            for ext in exts:
-                if ext in input_extensions:
-                    unwelcome_filename = base.with_suffix(ext)
+    for _base, filenames in dupes.items():
+        welcome_filenames = [
+            filename
+            for filename in filenames
+            if filename.suffix not in input_extensions
+        ]
+        if welcome_filenames:
+            welcome_filename = welcome_filenames[0]
+            for unwelcome_filename in filenames:
+                if unwelcome_filename.suffix in input_extensions:
                     if verbose >= 1:
                         print(
                             display_file_operation(

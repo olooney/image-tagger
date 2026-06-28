@@ -36,6 +36,7 @@ CATEGORIES: list[str] = [
 
 
 TEST_CLEAN_FILENAMES: dict[str, str] = {
+    "a.b.jpg": "dotted_photo.jpg",
     "ai.jpg": "robot_portrait.jpg",
     "art.png": "picasso.png",
     "books.jpg": "library_book.jpg",
@@ -53,6 +54,7 @@ TEST_CLEAN_FILENAMES: dict[str, str] = {
 
 
 TEST_CATEGORIES: dict[str, str] = {
+    "a.b.jpg": "photography",
     "ai.jpg": "ai",
     "art.png": "art",
     "books.jpg": "books",
@@ -183,16 +185,19 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert "ai.jpg" in convert_stdout
     assert "comics.bmp" in convert_stdout
     assert "comics2.png" in convert_stdout
+    assert "converting a.b.webp to a.b.jpg ...success!" in convert_stdout
+    assert "removing duplicate a.b.webp to a.b.jpg ...success!" in convert_stdout
     assert "renaming hygge.webp to hygge.bmp ...success!" in convert_stdout
     assert "converting hygge.bmp to hygge.png ...success!" in convert_stdout
     assert "renaming speculative.bmp to speculative.webp ...success!" in convert_stdout
     assert (
         "converting speculative.webp to speculative.jpg ...success!" in convert_stdout
     )
-    assert convert_stdout.endswith(".jpg: 7\n.png: 5\n.tiff: 1\n")
+    assert convert_stdout.endswith(".jpg: 8\n.png: 5\n.tiff: 1\n")
     assert sorted(
         path.suffix.lower() for path in uploads_dir.iterdir() if path.is_file()
     ) == [
+        ".jpg",
         ".jpg",
         ".jpg",
         ".jpg",
@@ -207,6 +212,8 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
         ".png",
         ".tiff",
     ]
+    assert (uploads_dir / "a.b.jpg").exists()
+    assert not (uploads_dir / "a.b.webp").exists()
     assert (uploads_dir / "ai.jpg").exists()
     assert not (uploads_dir / "ai.jpeg").exists()
     assert (uploads_dir / "comics.png").exists()
@@ -222,11 +229,11 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     )
 
     tag_stdout = run_tag(uploads_dir, "-q")
-    assert tag_stdout == "number of image files to tag: 13\n............."
+    assert tag_stdout == "number of image files to tag: 14\n.............."
 
     with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
         rows = list(csv.DictReader(metadata_file))
-    assert len(rows) == 13
+    assert len(rows) == 14
     assert {row["status"] for row in rows} == {"ok"}
     clean_filenames = {row["original_filename"]: row["clean_filename"] for row in rows}
     assert clean_filenames == TEST_CLEAN_FILENAMES
@@ -234,6 +241,7 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     rename_stdout = run_cli("rename", str(uploads_dir))
     assert "renaming" in rename_stdout
     assert "success!" in rename_stdout
+    assert (uploads_dir / "dotted_photo.jpg").exists()
     assert (uploads_dir / "picasso.png").exists()
     assert (uploads_dir / "robot_portrait.jpg").exists()
     assert (uploads_dir / "library_book.jpg").exists()
@@ -268,6 +276,7 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert (workflow_workspace["root"] / "comics" / "garfield.png").exists()
     assert (workflow_workspace["root"] / "comics" / "garfield2.png").exists()
     assert (workflow_workspace["root"] / "hygge" / "cozy_room.png").exists()
+    assert (workflow_workspace["root"] / "photography" / "dotted_photo.jpg").exists()
     assert (workflow_workspace["root"] / "speculative" / "space_station.jpg").exists()
     assert (workflow_workspace["root"] / "vintage" / "antique_camera.tiff").exists()
     assert not (uploads_dir / "picasso.png").exists()
@@ -713,8 +722,8 @@ def test_convert_verbosity_two_prints_full_quoted_paths(
     """Show full convert paths at higher verbosity."""
     uploads_dir = tmp_path / "convert uploads"
     shutil.copytree(workflow_workspace["uploads"], uploads_dir)
-    source = uploads_dir / "comics.bmp"
-    target = uploads_dir / "comics.png"
+    source = uploads_dir / "a.b.webp"
+    target = uploads_dir / "a.b.jpg"
 
     output = run_cli("convert", str(uploads_dir), "-v")
 
@@ -751,7 +760,7 @@ def test_convert_fixes_mismatched_image_formats(
 @pytest.mark.parametrize(
     ("verbosity_args", "expected"),
     [
-        (("-q",), "number of image files to tag: 13\n............."),
+        (("-q",), "number of image files to tag: 14\n.............."),
         ((), "books.jpg -> library_book.jpg"),
         (("-v",), "'original_filename': 'books.jpg'"),
     ],
