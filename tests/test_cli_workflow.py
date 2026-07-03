@@ -111,6 +111,79 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
         pass
 
 
+class MockSameImageClientAdapter(it.VisionModelClientAdapter):
+    """Vision adapter with deterministic same-image judgements."""
+
+    provider_name = "Mock"
+    model = "mock-vision"
+
+    def __init__(self, keep: str) -> None:
+        """Store the judgement to return."""
+        self.keep = keep
+        self.calls: list[list[str] | str] = []
+        self.prompts: list[str] = []
+
+    def vision_task(
+        self,
+        image_base64: str | list[str],
+        prompt: str,
+        response_format: type[BaseModel],
+    ) -> it.VisionTaskResult:
+        """Return a canned same-image judgement."""
+        self.calls.append(image_base64)
+        self.prompts.append(prompt)
+        content = json.dumps(
+            {
+                "thinking": f"keep {self.keep}",
+                "keep": self.keep,
+            }
+        )
+        return it.VisionTaskResult(content=content, model=self.model, total_tokens=0)
+
+    def cleanup(self) -> None:
+        """No-op cleanup for tests."""
+        pass
+
+
+class FakeImageComparisonMethod:
+    """Comparison method returning prebuilt similarities."""
+
+    def __init__(self, scores: dict[tuple[str, str], float]) -> None:
+        """Store scores by path name pair."""
+        self.scores = scores
+        self.calls: list[tuple[list[Path], list[Path] | None, int, int]] = []
+
+    def compare(
+        self,
+        left_images: list[Path],
+        right_images: list[Path] | None = None,
+        *,
+        batch_size: int = 32,
+        verbose: int = 1,
+    ) -> list[it.ImageSimilarity]:
+        """Return configured scores for self or rectangular comparison."""
+        self.calls.append((left_images, right_images, batch_size, verbose))
+        pairs: list[tuple[Path, Path]] = []
+        if right_images is None:
+            for left_index, left_path in enumerate(left_images):
+                for right_path in left_images[left_index + 1 :]:
+                    pairs.append((left_path, right_path))
+        else:
+            for left_path in left_images:
+                for right_path in right_images:
+                    if left_path != right_path:
+                        pairs.append((left_path, right_path))
+        return [
+            it.ImageSimilarity(
+                score=score,
+                left_path=left_path,
+                right_path=right_path,
+            )
+            for left_path, right_path in pairs
+            if (score := self.scores.get((left_path.name, right_path.name))) is not None
+        ]
+
+
 @pytest.fixture
 def workflow_workspace(tmp_path: Path) -> dict[str, Path]:
     """Create a full upload workflow workspace."""
@@ -804,3 +877,267 @@ def test_tag_allows_instructions_filename_override(
 
     assert PROMPTS
     assert all(prompt.startswith("Custom tagging instructions.") for prompt in PROMPTS)
+
+
+def test_dedupe_image_matches_accepts_self_comparison_upper_triangle(
+    tmp_path: Path,
+) -> None:
+    """Accept high-score self-comparison matches from the strategy."""
+    paths = [tmp_path / "b.jpg", tmp_path / "a.jpg", tmp_path / "c.jpg"]
+    for path in paths:
+        Image.new("RGB", (4, 4)).save(path)
+    comparison_method = FakeImageComparisonMethod(
+        {
+            ("a.jpg", "b.jpg"): 0.995,
+            ("a.jpg", "c.jpg"): 0.2,
+            ("b.jpg", "c.jpg"): 0.89,
+        }
+    )
+
+    matches = it.dedupe_image_matches(
+        paths,
+        automatic_threshold=0.99,
+        llm_threshold=0.9,
+        comparison_method=comparison_method,
+        verbose=0,
+    )
+
+    assert comparison_method.calls[0][0] == [
+        tmp_path / "a.jpg",
+        tmp_path / "b.jpg",
+        tmp_path / "c.jpg",
+    ]
+    assert comparison_method.calls[0][1] is None
+    assert [(match.left_path.name, match.right_path.name) for match in matches] == [
+        ("a.jpg", "b.jpg")
+    ]
+    assert matches[0].decision_source == "clip"
+
+
+def test_dedupe_image_matches_accepts_asymmetric_rectangular_pairs(
+    tmp_path: Path,
+) -> None:
+    """Accept high-score left/right matches for future asymmetric workflows."""
+    left_a = tmp_path / "left-a.jpg"
+    left_b = tmp_path / "left-b.jpg"
+    right_a = tmp_path / "right-a.jpg"
+    right_b = tmp_path / "right-b.jpg"
+    for path in [left_a, left_b, right_a, right_b]:
+        Image.new("RGB", (4, 4)).save(path)
+    comparison_method = FakeImageComparisonMethod(
+        {
+            ("left-a.jpg", "right-a.jpg"): 0.991,
+            ("left-a.jpg", "right-b.jpg"): 0.1,
+            ("left-b.jpg", "right-a.jpg"): 0.4,
+        }
+    )
+
+    matches = it.dedupe_image_matches(
+        [left_b, left_a],
+        [right_b, right_a],
+        automatic_threshold=0.99,
+        llm_threshold=0.9,
+        comparison_method=comparison_method,
+        verbose=0,
+    )
+
+    assert comparison_method.calls[0][1] == [right_a, right_b]
+    assert [(match.left_path.name, match.right_path.name) for match in matches] == [
+        ("left-a.jpg", "right-a.jpg")
+    ]
+
+
+def test_dedupe_image_matches_keeps_larger_image_automatically(
+    tmp_path: Path,
+) -> None:
+    """Keep the larger image for automatic high-confidence matches."""
+    small_path = tmp_path / "a-small.jpg"
+    large_path = tmp_path / "z-large.jpg"
+    Image.new("RGB", (4, 4)).save(small_path)
+    Image.new("RGB", (8, 8)).save(large_path)
+    comparison_method = FakeImageComparisonMethod(
+        {(small_path.name, large_path.name): 0.995}
+    )
+
+    matches = it.dedupe_image_matches(
+        [small_path, large_path],
+        comparison_method=comparison_method,
+        verbose=0,
+    )
+
+    assert [(match.left_path, match.right_path) for match in matches] == [
+        (large_path, small_path)
+    ]
+
+
+def test_dedupe_image_matches_breaks_automatic_size_ties_by_filename(
+    tmp_path: Path,
+) -> None:
+    """Keep the lexicographically first filename when image sizes tie."""
+    first_path = tmp_path / "a-first.jpg"
+    second_path = tmp_path / "b-second.jpg"
+    Image.new("RGB", (4, 4)).save(first_path)
+    Image.new("RGB", (4, 4)).save(second_path)
+    comparison_method = FakeImageComparisonMethod(
+        {(first_path.name, second_path.name): 0.995}
+    )
+
+    matches = it.dedupe_image_matches(
+        [second_path, first_path],
+        comparison_method=comparison_method,
+        verbose=0,
+    )
+
+    assert [(match.left_path, match.right_path) for match in matches] == [
+        (first_path, second_path)
+    ]
+
+
+@pytest.mark.parametrize("provider", list(it.VisionModelProvider))
+@pytest.mark.parametrize("keep", ["left", "right", "both"])
+def test_dedupe_image_matches_uses_llm_for_borderline_candidates(
+    tmp_path: Path,
+    provider: it.VisionModelProvider,
+    keep: str,
+) -> None:
+    """Confirm borderline pairs through an injected vision adapter."""
+    left_path = tmp_path / "left.jpg"
+    right_path = tmp_path / "right.jpg"
+    Image.new("RGB", (4, 5)).save(left_path)
+    Image.new("RGB", (6, 7)).save(right_path)
+    comparison_method = FakeImageComparisonMethod({("left.jpg", "right.jpg"): 0.95})
+    client_adapter = MockSameImageClientAdapter(keep)
+
+    matches = it.dedupe_image_matches(
+        [left_path, right_path],
+        automatic_threshold=0.99,
+        llm_threshold=0.9,
+        provider=provider,
+        comparison_method=comparison_method,
+        client_adapter=client_adapter,
+        verbose=0,
+    )
+
+    assert len(client_adapter.calls) == 1
+    assert 'Left file: "left.jpg" (4x5)' in client_adapter.prompts[0]
+    assert 'Right file: "right.jpg" (6x7)' in client_adapter.prompts[0]
+    assert len(matches) == (0 if keep == "both" else 1)
+    if keep != "both":
+        assert matches[0].decision_source == "llm"
+        assert matches[0].judgement_text == f"keep {keep}"
+        expected_kept = left_path if keep == "left" else right_path
+        expected_duplicate = right_path if keep == "left" else left_path
+        assert (matches[0].left_path, matches[0].right_path) == (
+            expected_kept,
+            expected_duplicate,
+        )
+
+
+def test_dedupe_image_matches_prints_verbose_llm_judgement_details(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Show second-pass LLM details at high verbosity."""
+    left_path = tmp_path / "left image.jpg"
+    right_path = tmp_path / "right.jpg"
+    Image.new("RGB", (4, 5)).save(left_path)
+    Image.new("RGB", (6, 7)).save(right_path)
+    comparison_method = FakeImageComparisonMethod(
+        {(left_path.name, right_path.name): 0.95}
+    )
+    client_adapter = MockSameImageClientAdapter("both")
+
+    matches = it.dedupe_image_matches(
+        [left_path, right_path],
+        automatic_threshold=0.99,
+        llm_threshold=0.9,
+        comparison_method=comparison_method,
+        client_adapter=client_adapter,
+        verbose=2,
+    )
+
+    output = capsys.readouterr().out
+    assert matches == []
+    assert "LLM duplicate candidate 95.00%:" in output
+    assert f"left: {quote_display_path(left_path)} (4x5)" in output
+    assert f"right: {quote_display_path(right_path)} (6x7)" in output
+    assert "keep: both" in output
+    assert "reason: keep both" in output
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_dedupe_cli_removes_duplicate_with_relative_default_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_cli: Callable[..., str],
+    dry_run: bool,
+) -> None:
+    """Remove duplicate files through the CLI while respecting dry-run."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    kept = uploads_dir / "kept.jpg"
+    duplicate = uploads_dir / "duplicate.jpg"
+    kept.touch()
+    duplicate.touch()
+
+    monkeypatch.setattr(
+        it,
+        "dedupe_image_matches",
+        lambda *args, **kwargs: [
+            it.ImageDuplicateMatch(
+                score=1.0,
+                left_path=kept,
+                right_path=duplicate,
+                decision_source="clip",
+            )
+        ],
+    )
+    dry_run_args = ("--dry-run",) if dry_run else ()
+
+    output = run_cli("dedupe", str(uploads_dir), *dry_run_args)
+
+    assert output.splitlines()[0] == f"working in {quote_display_path(uploads_dir)}"
+    assert "removing duplicate duplicate.jpg to kept.jpg ...success!" in output
+    assert duplicate.exists() is dry_run
+    assert kept.exists()
+
+
+def test_dedupe_cli_passes_custom_thresholds_and_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_cli: Callable[..., str],
+) -> None:
+    """Pass dedupe CLI options through to the public API."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    calls: list[dict[str, object]] = []
+
+    def fake_dedupe_images(directory: Path, **kwargs: object) -> list[it.ImageDuplicateMatch]:
+        calls.append({"directory": directory, **kwargs})
+        return []
+
+    monkeypatch.setattr(it, "dedupe_images", fake_dedupe_images)
+
+    run_cli(
+        "dedupe",
+        str(uploads_dir),
+        "--automatic-threshold",
+        "0.98",
+        "--llm-threshold",
+        "0.82",
+        "--provider",
+        "gemma",
+        "--dry-run",
+        "-v",
+    )
+
+    assert calls == [
+        {
+            "directory": uploads_dir,
+            "automatic_threshold": 0.98,
+            "llm_threshold": 0.82,
+            "verbose": 2,
+            "dry_run": True,
+            "provider": "gemma",
+        }
+    ]

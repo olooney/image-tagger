@@ -35,6 +35,7 @@ The upload workflow is available through `just` tasks:
 
 ```powershell
 just convert [DIRECTORY]
+just dedupe [DIRECTORY]
 just tag [DIRECTORY]
 just rename [DIRECTORY]
 just gallery [DIRECTORY]
@@ -49,6 +50,10 @@ and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
 If `DIRECTORY` is omitted, the tools use the configured uploads folder. By
 default, metadata is written to `image_metadata.csv` inside that directory.
+
+`just dedupe` removes duplicate images under `DIRECTORY`. CLIP scores at or
+above `--automatic-threshold` are removed automatically; scores at or above
+`--llm-threshold` are confirmed by the selected vision model before removal.
 
 `just wall` creates an `index.html` image wall directly from every supported image
 under `DIRECTORY`. It uses relative image paths, computes a median image aspect

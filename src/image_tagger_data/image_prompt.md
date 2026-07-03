@@ -21,10 +21,12 @@ Follow these general filename rules unless a more specific rule below overrides 
 
 If the image is a book cover, base the filename on the title while respecting the length,
 case, extension, and separator rules above. Use ONLY the book title for the filename: Do NOT
-include the author or extra words like "_book", "_cover", "cover_art", etc. Always omit the
-leading article ("a", "an", or "the") but retain all articles, conjunctions, and other words
+include the author or extra words like "_book", "_cover", "cover_art", etc. Do NOT include the
+subtitle of a book in the filename; a subtitle is identifiable by a colon separator or a different, smaller font.
+Always omit the leading article ("a", "an", or "the") but retain all articles, conjunctions, and other words
 inside the title. If the title is not in English, translate the title into English or use the
-standard English title for the work if you know it.
+standard English title for the work if you know it. If the book cover is from a series, use the series
+short, colloquial name as a prefix, e.g. "zap_z64_*" or "analog_*".
 
 If the image is a piece of art and you either know the artist's name or it's in the original filename,
 include their last name only (or mononym) as a suffix like so: "sunflowers_picasso.png". Do not

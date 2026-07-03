@@ -11,6 +11,9 @@ convert *args:
 tag *args:
     {{python}} src/cli.py tag {{args}}
 
+dedupe *args:
+    {{python}} src/cli.py dedupe {{args}}
+
 rename *args:
     {{python}} src/cli.py rename {{args}}
 

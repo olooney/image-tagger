@@ -64,6 +64,18 @@ def tag_uploads(args: argparse.Namespace) -> None:
     )
 
 
+def dedupe_uploads(args: argparse.Namespace) -> None:
+    """Remove duplicate upload images."""
+    it.dedupe_images(
+        args.directory,
+        automatic_threshold=args.automatic_threshold,
+        llm_threshold=args.llm_threshold,
+        verbose=args.verbose,
+        dry_run=args.dry_run,
+        provider=args.provider,
+    )
+
+
 def rename_uploads(args: argparse.Namespace) -> None:
     """Rename uploads from metadata."""
     it.rename_images(
@@ -180,6 +192,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_upload_args(convert_parser)
     convert_parser.set_defaults(func=convert_uploads)
+
+    dedupe_parser = subparsers.add_parser(
+        "dedupe", help="Remove duplicate uploads with CLIP and optional LLM checks."
+    )
+    add_common_upload_args(dedupe_parser)
+    dedupe_parser.add_argument(
+        "--automatic-threshold",
+        type=float,
+        default=0.99,
+        help="CLIP score accepted as duplicate without LLM confirmation.",
+    )
+    dedupe_parser.add_argument(
+        "--llm-threshold",
+        type=float,
+        default=0.9,
+        help="CLIP score sent to the LLM for duplicate confirmation.",
+    )
+    dedupe_parser.add_argument(
+        "--provider",
+        choices=["openai", "gemma", "qwen"],
+        default="openai",
+    )
+    dedupe_parser.set_defaults(func=dedupe_uploads)
 
     tag_parser = subparsers.add_parser(
         "tag", help="Tag upload images with a vision model."

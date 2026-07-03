@@ -8,17 +8,19 @@ import string
 import time
 import traceback
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager, redirect_stderr
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from importlib import resources
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 import jinja2
+import numpy as np
 import pandas as pd
 import requests
 from PIL import Image
@@ -46,9 +48,72 @@ class ImageTagData(BaseModel):
     filename: str
 
 
+class SameImageJudgement(BaseModel):
+    """Structured duplicate survivor judgement returned by vision models."""
+
+    thinking: str
+    keep: Literal["left", "right", "both"]
+
+
+@dataclass(frozen=True)
+class ImageSimilarity:
+    """A scored pair of potentially duplicate images."""
+
+    score: float
+    left_path: Path
+    right_path: Path
+
+
+@dataclass(frozen=True)
+class ImageDuplicateMatch:
+    """Accepted duplicate image match."""
+
+    score: float
+    left_path: Path
+    right_path: Path
+    decision_source: str
+    judgement_text: str | None = None
+
+
+class ImageComparisonMethod(Protocol):
+    """Score image pairs; higher scores mean more likely duplicates."""
+
+    def compare(
+        self,
+        left_images: list[Path],
+        right_images: list[Path] | None = None,
+        *,
+        batch_size: int = 32,
+        verbose: int = 1,
+    ) -> list[ImageSimilarity]:
+        """Return scored image pairs."""
+        ...
+
+
+@contextmanager
+def suppress_transformers_progress() -> Iterator[None]:
+    """Suppress Transformers progress bars during model loading."""
+    from transformers.utils import logging as transformers_logging
+
+    was_enabled = transformers_logging.is_progress_bar_enabled()
+    transformers_logging.disable_progress_bar()
+    try:
+        with redirect_stderr(StringIO()):
+            yield
+    finally:
+        if was_enabled:
+            transformers_logging.enable_progress_bar()
+
+
 IMAGE_PROMPT_TEMPLATE: str = (
     resources.files("image_tagger_data").joinpath("image_prompt.md").read_text()
 )
+SAME_IMAGE_PROMPT_TEMPLATE: str = (
+    resources.files("image_tagger_data")
+    .joinpath("same_image_prompt.md")
+    .read_text()
+)
+CLIP_MODEL: str = "openai/clip-vit-base-patch32"
 
 csv_columns: list[str] = [
     "timestamp",
@@ -78,7 +143,7 @@ class VisionModelProvider(Enum):
     QWEN = "qwen"
 
 
-GEMMA_MODEL: str = "gemma4:e4b"
+GEMMA_MODEL: str = "gemma4:12b"
 OPENAI_MODEL: str = "gpt-5.5"
 QWEN_MODEL: str = "qwen3.5:4b"
 
@@ -90,7 +155,6 @@ class VisionTaskResult:
     content: str
     model: str
     total_tokens: int
-
 
 class VisionModelClientAdapter(ABC):
     """Common interface for vision providers."""
@@ -120,7 +184,6 @@ class VisionModelClientAdapter(ABC):
     def cleanup(self) -> None:
         """Release provider resources."""
         pass
-
 
 class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
     """OpenAI vision provider adapter."""
@@ -322,6 +385,261 @@ def base64_encode_image(image: Image.Image | Pathish) -> str:
     base64_encoded_bytes = base64.b64encode(byte_data)
 
     return base64_encoded_bytes.decode("utf-8")
+
+
+class ClipImageComparisonMethod:
+    """Compare images with normalized CLIP image embeddings."""
+
+    def __init__(self, model: str = CLIP_MODEL) -> None:
+        """Create a CLIP comparison method."""
+        import torch
+        from transformers import CLIPModel, CLIPProcessor
+
+        self.model = model
+        self.torch = torch
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        with suppress_transformers_progress():
+            self.processor: Any = CLIPProcessor.from_pretrained(self.model)
+            clip_client: Any = CLIPModel.from_pretrained(self.model)
+        self.client = clip_client.to(self.device)
+        self.client.eval()
+
+    def embed_images(self, images: list[Image.Image]) -> np.ndarray:
+        """Embed PIL images as normalized CLIP vectors."""
+        inputs = self.processor(
+            images=[image.convert("RGB") for image in images],
+            return_tensors="pt",
+        )
+        inputs = {name: value.to(self.device) for name, value in inputs.items()}
+
+        with self.torch.no_grad():
+            output = self.client.get_image_features(**inputs)
+            features = output.pooler_output
+            features = features / features.norm(dim=-1, keepdim=True)
+
+        return features.detach().cpu().to(self.torch.float64).numpy()
+
+    def compare(
+        self,
+        left_images: list[Path],
+        right_images: list[Path] | None = None,
+        *,
+        batch_size: int = 32,
+        verbose: int = 1,
+    ) -> list[ImageSimilarity]:
+        """Return CLIP similarity scores for image pairs."""
+        left_vectors = embed_image_paths(
+            left_images,
+            clip_adapter=self,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+        if right_images is None:
+            similarity_matrix = left_vectors @ left_vectors.T
+            upper_i, upper_j = np.triu_indices_from(similarity_matrix, k=1)
+            return [
+                ImageSimilarity(
+                    score=float(similarity_matrix[i, j]),
+                    left_path=left_images[int(i)],
+                    right_path=left_images[int(j)],
+                )
+                for i, j in zip(upper_i, upper_j, strict=True)
+            ]
+
+        right_vectors = embed_image_paths(
+            right_images,
+            clip_adapter=self,
+            batch_size=batch_size,
+            verbose=verbose,
+        )
+        similarity_matrix = left_vectors @ right_vectors.T
+        similarities: list[ImageSimilarity] = []
+        for left_index, left_path in enumerate(left_images):
+            for right_index, right_path in enumerate(right_images):
+                if left_path == right_path:
+                    continue
+                similarities.append(
+                    ImageSimilarity(
+                        score=float(similarity_matrix[left_index, right_index]),
+                        left_path=left_path,
+                        right_path=right_path,
+                    )
+                )
+        return similarities
+
+
+def embed_image_paths(
+    image_paths: list[Path],
+    clip_adapter: ClipImageComparisonMethod | None = None,
+    batch_size: int = 32,
+    verbose: int = 1,
+) -> np.ndarray:
+    """Embed image paths as normalized CLIP vectors."""
+    clip = clip_adapter or ClipImageComparisonMethod()
+    vectors: list[np.ndarray] = []
+
+    for start in range(0, len(image_paths), batch_size):
+        batch_paths = image_paths[start : start + batch_size]
+        batch_images: list[Image.Image] = []
+
+        for path in batch_paths:
+            with Image.open(path) as image:
+                batch_images.append(image.convert("RGB").copy())
+
+        vectors.append(clip.embed_images(batch_images))
+        if verbose >= 2:
+            complete_count = min(start + batch_size, len(image_paths))
+            print(f"embedded {complete_count}/{len(image_paths)}")
+
+    if not vectors:
+        return np.empty((0, 0), dtype=np.float64)
+    return np.vstack(vectors)
+
+
+def image_dimensions(image_path: Pathish) -> tuple[int, int]:
+    """Return image width and height."""
+    with Image.open(image_path) as image:
+        return image.size
+
+
+def automatic_duplicate_survivor(left_path: Path, right_path: Path) -> tuple[Path, Path]:
+    """Choose the kept and duplicate paths for automatic matches."""
+    left_width, left_height = image_dimensions(left_path)
+    right_width, right_height = image_dimensions(right_path)
+    left_pixels = left_width * left_height
+    right_pixels = right_width * right_height
+    if left_pixels > right_pixels:
+        return left_path, right_path
+    if right_pixels > left_pixels:
+        return right_path, left_path
+    if left_path.name <= right_path.name:
+        return left_path, right_path
+    return right_path, left_path
+
+
+def format_image_detail(image_path: Pathish) -> str:
+    """Format an image path with dimensions for verbose output."""
+    width, height = image_dimensions(image_path)
+    return f"{quote_display_path(image_path)} ({width}x{height})"
+
+
+def judge_same_image_match(
+    left_path: Pathish,
+    right_path: Pathish,
+    *,
+    provider: VisionModelProvider = VisionModelProvider.OPENAI,
+    client_adapter: VisionModelClientAdapter | None = None,
+    max_dimension: int = 768,
+) -> SameImageJudgement:
+    """Ask a vision model whether two images are the same source image."""
+    owned_adapter = client_adapter is None
+    if client_adapter is None:
+        client_adapter = get_vision_model_client_adapter(provider)
+
+    try:
+        left_width, left_height = image_dimensions(left_path)
+        right_width, right_height = image_dimensions(right_path)
+        prompt = SAME_IMAGE_PROMPT_TEMPLATE.format(
+            left_filename=Path(left_path).name,
+            left_width=left_width,
+            left_height=left_height,
+            right_filename=Path(right_path).name,
+            right_width=right_width,
+            right_height=right_height,
+        )
+        left_image = resize_image_to_fit(left_path, max_dimension=max_dimension)
+        right_image = resize_image_to_fit(right_path, max_dimension=max_dimension)
+        image_base64 = [base64_encode_image(left_image), base64_encode_image(right_image)]
+        response = client_adapter.vision_task(
+            image_base64,
+            prompt,
+            SameImageJudgement,
+        )
+        return SameImageJudgement(**json.loads(response.content))
+    finally:
+        if owned_adapter:
+            client_adapter.cleanup()
+
+
+def dedupe_image_matches(
+    left_images: Iterable[Pathish],
+    right_images: Iterable[Pathish] | None = None,
+    *,
+    automatic_threshold: float = 0.99,
+    llm_threshold: float = 0.9,
+    provider: VisionModelProvider = VisionModelProvider.OPENAI,
+    batch_size: int = 32,
+    comparison_method: ImageComparisonMethod | None = None,
+    client_adapter: VisionModelClientAdapter | None = None,
+    verbose: int = 1,
+) -> list[ImageDuplicateMatch]:
+    """Return accepted duplicate matches from image similarity scores."""
+    left_paths = sorted(Path(path) for path in left_images)
+    right_paths = None if right_images is None else sorted(Path(path) for path in right_images)
+    if right_paths is None and len(left_paths) < 2:
+        return []
+    if right_paths is not None and (not left_paths or not right_paths):
+        return []
+    method = comparison_method or ClipImageComparisonMethod()
+    similarities = method.compare(
+        left_paths,
+        right_paths,
+        batch_size=batch_size,
+        verbose=verbose,
+    )
+
+    matches: list[ImageDuplicateMatch] = []
+    borderline_similarities: list[ImageSimilarity] = []
+    for similarity in similarities:
+        if similarity.score >= automatic_threshold:
+            kept_path, duplicate_path = automatic_duplicate_survivor(
+                similarity.left_path,
+                similarity.right_path,
+            )
+            matches.append(
+                ImageDuplicateMatch(
+                    score=similarity.score,
+                    left_path=kept_path,
+                    right_path=duplicate_path,
+                    decision_source="clip",
+                )
+            )
+        elif similarity.score >= llm_threshold:
+            borderline_similarities.append(similarity)
+
+    for similarity in borderline_similarities:
+        if verbose >= 2:
+            print(
+                f"LLM duplicate candidate {similarity.score * 100:0.2f}%:\n"
+                f"  left: {format_image_detail(similarity.left_path)}\n"
+                f"  right: {format_image_detail(similarity.right_path)}"
+            )
+        judgement = judge_same_image_match(
+            similarity.left_path,
+            similarity.right_path,
+            provider=provider,
+            client_adapter=client_adapter,
+        )
+        if verbose >= 2:
+            print(f"  keep: {judgement.keep}")
+            if judgement.thinking:
+                print(f"  reason: {judgement.thinking}")
+        if judgement.keep == "both":
+            continue
+        kept_path = similarity.left_path if judgement.keep == "left" else similarity.right_path
+        duplicate_path = similarity.right_path if judgement.keep == "left" else similarity.left_path
+        if kept_path != duplicate_path:
+            matches.append(
+                ImageDuplicateMatch(
+                    score=similarity.score,
+                    left_path=kept_path,
+                    right_path=duplicate_path,
+                    decision_source="llm",
+                    judgement_text=judgement.thinking,
+                )
+            )
+
+    return sorted(matches, key=lambda match: match.score, reverse=True)
 
 
 def tag_image(
@@ -531,6 +849,63 @@ def find_images(
             filepaths.append(filepath)
 
     return filepaths
+
+
+def dedupe_images(
+    directory: Pathish,
+    *,
+    automatic_threshold: float = 0.99,
+    llm_threshold: float = 0.9,
+    verbose: int = 1,
+    dry_run: bool = False,
+    provider: VisionModelProvider = VisionModelProvider.OPENAI,
+    batch_size: int = 32,
+) -> list[ImageDuplicateMatch]:
+    """Remove duplicate images from a directory."""
+    directory_path = Path(directory)
+    image_paths = sorted(find_images(directory_path))
+    if verbose == 1:
+        print(f"working in {quote_display_path(directory_path)}")
+    matches = dedupe_image_matches(
+        image_paths,
+        automatic_threshold=automatic_threshold,
+        llm_threshold=llm_threshold,
+        provider=provider,
+        batch_size=batch_size,
+        verbose=verbose,
+    )
+
+    removed_paths: set[Path] = set()
+    for match in matches:
+        duplicate = match.right_path
+        kept = match.left_path
+        if duplicate in removed_paths or kept in removed_paths:
+            continue
+        if verbose >= 1:
+            print(
+                display_file_operation(
+                    "removing duplicate",
+                    duplicate,
+                    kept,
+                    verbose=verbose,
+                    relative_to=directory_path,
+                ),
+                end="",
+            )
+        try:
+            if not dry_run:
+                duplicate.unlink()
+            removed_paths.add(duplicate)
+            if verbose >= 1:
+                print("success!")
+        except Exception:
+            if verbose >= 1:
+                print("error!")
+            else:
+                print(f"error removing {os.fspath(duplicate)!r}!")
+            traceback.print_exc()
+
+    return matches
 
 
 def scramble_image_directory(
