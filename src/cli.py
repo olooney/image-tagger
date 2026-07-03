@@ -194,7 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
     convert_parser.set_defaults(func=convert_uploads)
 
     dedupe_parser = subparsers.add_parser(
-        "dedupe", help="Remove duplicate uploads with CLIP and optional LLM checks."
+        "dedupe",
+        help="Remove duplicate uploads with CLIP and optional LLM checks.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_common_upload_args(dedupe_parser)
     dedupe_parser.add_argument(
@@ -213,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider",
         choices=["openai", "gemma", "qwen"],
         default="openai",
+        help="Vision model provider for borderline duplicate confirmation.",
     )
     dedupe_parser.set_defaults(func=dedupe_uploads)
 

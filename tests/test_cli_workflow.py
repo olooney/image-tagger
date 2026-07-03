@@ -1141,3 +1141,23 @@ def test_dedupe_cli_passes_custom_thresholds_and_provider(
             "provider": "gemma",
         }
     ]
+
+
+def test_dedupe_help_shows_default_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show dedupe option defaults in help output."""
+    stdout = StringIO()
+    monkeypatch.setattr(sys, "argv", ["cli.py", "dedupe", "--help"])
+    with pytest.raises(SystemExit) as exc_info:
+        with redirect_stdout(stdout):
+            cli.main()
+
+    assert exc_info.value.code == 0
+    output = stdout.getvalue()
+    assert "--automatic-threshold AUTOMATIC_THRESHOLD" in output
+    assert "(default: 0.99)" in output
+    assert "--llm-threshold LLM_THRESHOLD" in output
+    assert "(default: 0.9)" in output
+    assert "--provider {openai,gemma,qwen}" in output
+    assert "(default: openai)" in output
