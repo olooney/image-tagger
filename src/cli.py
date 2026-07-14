@@ -119,13 +119,18 @@ def scramble_uploads(args: argparse.Namespace) -> None:
 
 def gallery_uploads(args: argparse.Namespace) -> None:
     """Generate and optionally preview a gallery."""
+    output_filename = (
+        args.output_filename
+        if args.output_filename is not None
+        else args.directory / GALLERY_NAME.name
+    )
     it.generate_gallery(
         args.metadata_filename,
-        args.output_filename,
+        output_filename,
         verbose=args.verbose,
     )
     if args.preview:
-        preview(args.output_filename)
+        preview(output_filename)
 
 
 def wall_uploads(args: argparse.Namespace) -> None:
@@ -257,9 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
         "gallery", help="Generate the upload gallery HTML."
     )
     add_common_upload_args(gallery_parser)
-    gallery_parser.add_argument(
-        "--output-filename", type=path_arg, default=GALLERY_NAME
-    )
+    gallery_parser.add_argument("--output-filename", type=path_arg)
     gallery_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True
     )

@@ -459,6 +459,51 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "This row should not render." not in html
 
 
+def test_gallery_cli_defaults_output_to_selected_directory(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Write gallery index beside metadata in the selected directory."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    image_filename = uploads_dir / "books.jpg"
+    Image.new("RGB", (20, 20)).save(image_filename)
+    with (uploads_dir / "image_metadata.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(image_filename),
+                "original_filename": image_filename.name,
+                "width": "20",
+                "height": "20",
+                "category": "books",
+                "genre": "mock",
+                "filename": image_filename.name,
+                "clean_filename": image_filename.name,
+                "filename_already_makes_sense": "True",
+                "tags": "books;mock",
+                "description": "Mock description for books.jpg.",
+            }
+        )
+
+    run_cli("gallery", str(uploads_dir), "--no-preview")
+
+    gallery_filename = uploads_dir / "index.html"
+    assert gallery_filename.exists()
+    assert "Mock description for books.jpg." in gallery_filename.read_text(
+        encoding="utf-8"
+    )
+    assert not (tmp_path / "index.html").exists()
+
+
 def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     tmp_path: Path,
     run_cli: Callable[..., str],
