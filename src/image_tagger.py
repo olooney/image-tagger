@@ -1,5 +1,6 @@
 import base64
 import csv
+import hashlib
 import json
 import os
 import random
@@ -958,6 +959,16 @@ def paths_with_mtime(filepaths: Iterable[Pathish]) -> list[tuple[float, Path]]:
     """Return file paths paired with their modification times."""
     return [(Path(filepath).stat().st_mtime, Path(filepath)) for filepath in filepaths]
 
+
+DEFAULT_WALL_RANDOM_SEED: int = 37
+
+
+def seeded_wall_sort_key(directory: Path, filepath: Path, seed: int) -> tuple[bytes, str]:
+    """Return a stable pseudo-random wall sort key for a file path."""
+    relative_filepath = Path(os.path.relpath(filepath, directory)).as_posix()
+    key_text = f"{seed}\0{relative_filepath}".encode("utf-8", errors="surrogateescape")
+    return hashlib.blake2b(key_text, digest_size=16).digest(), relative_filepath
+
 WALL_TITLE_TEMPLATE = """{clean_filename} ({width}x{height})
 Category: {category}
 Genre: {genre}
@@ -1003,6 +1014,7 @@ def generate_wall(
     output_filename: Pathish | None = None,
     metadata_filename: Pathish | None = None,
     order: str = "name",
+    seed: int | None = None,
     verbose: int = 1,
 ) -> Path:
     """Generate a static image wall HTML file."""
@@ -1019,7 +1031,12 @@ def generate_wall(
             for _, filepath in sorted(paths_with_mtime(filepaths), reverse=True)
         ]
     elif order == "random":
-        random.shuffle(filepaths)
+        if seed is None:
+            random.shuffle(filepaths)
+        else:
+            filepaths.sort(
+                key=lambda filepath: seeded_wall_sort_key(directory_path, filepath, seed)
+            )
     else:
         raise ValueError(f"Unsupported wall order: {order}")
     aspect_ratios = image_aspect_ratios(filepaths)

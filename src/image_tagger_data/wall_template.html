@@ -20,6 +20,35 @@
             background: #111;
         }
         body { overflow-x: hidden; }
+        .search-panel {
+            position: fixed;
+            top: 0.75rem;
+            right: 0.75rem;
+            z-index: 20;
+            display: none;
+            width: min(22rem, calc(100vw - 1.5rem));
+            padding: 0.5rem;
+            border: 1px solid rgb(255 255 255 / 22%);
+            border-radius: 0.25rem;
+            background: rgb(0 0 0 / 78%);
+            box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 35%);
+        }
+        .search-panel.is-open { display: block; }
+        .search-panel input {
+            display: block;
+            width: 100%;
+            height: 2rem;
+            padding: 0 0.6rem;
+            border: 1px solid rgb(255 255 255 / 28%);
+            border-radius: 0.2rem;
+            background: #111;
+            color: #fff;
+            font: 1rem/1.2 Georgia, 'Times New Roman', serif;
+        }
+        .search-panel input:focus {
+            outline: 2px solid #fff;
+            outline-offset: 2px;
+        }
         .wall {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(var(--cell-width), 1fr));
@@ -43,6 +72,7 @@
         .tile.double-wide {
             grid-column: span 2;
         }
+        .tile.is-hidden { display: none; }
         .tile img {
             display: block;
             width: 100%;
@@ -72,6 +102,9 @@
     </style>
 </head>
 <body>
+    <form class="search-panel" role="search" aria-label="Search image wall">
+        <input type="search" aria-label="Search filenames and titles" autocomplete="off" spellcheck="false">
+    </form>
     <main class="wall" aria-label="Image wall">
         {% for item in items %}
             <button class="tile{% if item.is_double_wide %} double-wide{% endif %}" type="button">
@@ -83,8 +116,49 @@
         <img alt="">
     </button>
     <script>
+        const searchPanel = document.querySelector('.search-panel');
+        const searchInput = searchPanel.querySelector('input');
         const lightbox = document.querySelector('.lightbox');
         const lightboxImage = lightbox.querySelector('img');
+        const tiles = Array.from(document.querySelectorAll('.tile'));
+
+        const filterTiles = () => {
+            const query = searchInput.value;
+
+            tiles.forEach((tile) => {
+                const image = tile.querySelector('img');
+                const searchText = `${image.alt}\n${image.title}`;
+                tile.classList.toggle('is-hidden', query !== '' && !searchText.includes(query));
+            });
+        };
+
+        const openSearch = () => {
+            searchPanel.classList.add('is-open');
+            searchInput.focus();
+            searchInput.select();
+        };
+
+        searchPanel.addEventListener('submit', (event) => {
+            event.preventDefault();
+        });
+
+        searchInput.addEventListener('input', filterTiles);
+
+        searchInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                searchInput.value = '';
+                filterTiles();
+                searchPanel.classList.remove('is-open');
+                searchInput.blur();
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+                event.preventDefault();
+                openSearch();
+            }
+        });
 
         document.querySelectorAll('.tile img').forEach((image) => {
             image.addEventListener('click', () => {

@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable
@@ -69,6 +70,11 @@ TEST_CATEGORIES: dict[str, str] = {
     "speculative.jpg": "speculative",
     "vintage.tiff": "vintage",
 }
+
+
+def wall_image_srcs(html: str) -> list[str]:
+    """Return rendered wall image sources in order."""
+    return re.findall(r'<img src="([^"]+)"', html)
 
 
 PROMPTS: list[str] = []
@@ -562,6 +568,10 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert 'Mock description for square.jpg.' in html
     assert 'title="wider.jpg"' in html
     assert str(uploads_dir) not in html
+    assert 'class="search-panel"' in html
+    assert "searchText.includes(query)" in html
+    assert "event.key.toLowerCase() === 'f'" in html
+    assert "event.ctrlKey || event.metaKey" in html
     assert "lightbox.classList.add('is-open')" in html
     assert "lightbox.classList.remove('is-open')" in html
 
@@ -584,6 +594,71 @@ def test_wall_cli_orders_images_by_date_newest_first(
 
     html = (uploads_dir / "index.html").read_text(encoding="utf-8")
     assert html.index('src="a-newer.jpg"') < html.index('src="z-older.jpg"')
+
+
+def test_wall_cli_random_order_accepts_seed(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Render deterministic random wall ordering from a seed."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    for filename in ["alpha.jpg", "bravo.jpg", "charlie.jpg", "delta.jpg"]:
+        Image.new("RGB", (100, 100)).save(uploads_dir / filename)
+
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "1", "--no-preview")
+    first_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "1", "--no-preview")
+    repeated_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "2", "--no-preview")
+    different_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+
+    assert first_html == repeated_html
+    assert first_html != different_html
+
+
+def test_wall_cli_random_order_defaults_to_seed_37(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Use seed 37 for random wall ordering when no seed is provided."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    for filename in ["alpha.jpg", "bravo.jpg", "charlie.jpg", "delta.jpg"]:
+        Image.new("RGB", (100, 100)).save(uploads_dir / filename)
+
+    run_cli("wall", str(uploads_dir), "--order", "random", "--no-preview")
+    default_seed_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "37", "--no-preview")
+    explicit_seed_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+
+    assert default_seed_html == explicit_seed_html
+
+
+def test_wall_cli_seeded_random_order_preserves_existing_relative_order(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Keep seeded random order stable when new images are added."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    original_filenames = ["alpha.jpg", "bravo.jpg", "charlie.jpg", "delta.jpg"]
+    for filename in original_filenames:
+        Image.new("RGB", (100, 100)).save(uploads_dir / filename)
+
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "42", "--no-preview")
+    first_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    original_order = wall_image_srcs(first_html)
+
+    Image.new("RGB", (100, 100)).save(uploads_dir / "echo.jpg")
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "42", "--no-preview")
+    expanded_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    expanded_original_order = [
+        src for src in wall_image_srcs(expanded_html) if src in original_filenames
+    ]
+
+    assert expanded_original_order == original_order
+    assert "echo.jpg" in wall_image_srcs(expanded_html)
 
 
 def test_paths_with_mtime_accepts_iterators(tmp_path: Path) -> None:

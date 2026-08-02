@@ -140,6 +140,7 @@ def wall_uploads(args: argparse.Namespace) -> None:
         args.output_filename,
         metadata_filename=args.metadata_filename,
         order=args.order,
+        seed=args.seed,
         verbose=args.verbose,
     )
     if args.preview:
@@ -278,6 +279,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["name", "date", "random"],
         default="name",
         help="Order wall images by name, newest date first, or random shuffle.",
+    )
+    wall_parser.add_argument(
+        "--seed",
+        type=int,
+        default=it.DEFAULT_WALL_RANDOM_SEED,
+        help="Seed for deterministic random wall ordering. Defaults to 37.",
     )
     wall_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True
