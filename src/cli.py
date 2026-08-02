@@ -141,6 +141,7 @@ def wall_uploads(args: argparse.Namespace) -> None:
         metadata_filename=args.metadata_filename,
         order=args.order,
         seed=args.seed,
+        title=args.title,
         verbose=args.verbose,
     )
     if args.preview:
@@ -285,6 +286,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=it.DEFAULT_WALL_RANDOM_SEED,
         help="Seed for deterministic random wall ordering. Defaults to 37.",
+    )
+    wall_parser.add_argument(
+        "--title",
+        help="HTML page title for the generated wall.",
     )
     wall_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True

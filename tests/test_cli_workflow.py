@@ -515,7 +515,7 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     run_cli: Callable[..., str],
 ) -> None:
     """Render a standalone image wall from discovered images."""
-    uploads_dir = tmp_path / "uploads"
+    uploads_dir = tmp_path / "books"
     nested_dir = uploads_dir / "nested"
     nested_dir.mkdir(parents=True)
     square_filename = uploads_dir / "square.jpg"
@@ -549,6 +549,7 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert output == f"wrote {quote_display_path(wall_filename)}\n"
     assert wall_filename.exists()
     assert html.startswith("<!doctype html>")
+    assert "<title>Book Wall</title>" in html
     assert "--cell-width: 200px;" in html
     assert "--cell-height: 100px;" in html
     assert "grid-template-columns: repeat(auto-fill" in html
@@ -574,6 +575,21 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "event.ctrlKey || event.metaKey" in html
     assert "lightbox.classList.add('is-open')" in html
     assert "lightbox.classList.remove('is-open')" in html
+
+
+def test_wall_cli_title_can_be_overridden(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Use an explicit HTML title when provided."""
+    uploads_dir = tmp_path / "books"
+    uploads_dir.mkdir()
+    Image.new("RGB", (100, 100)).save(uploads_dir / "square.jpg")
+
+    run_cli("wall", str(uploads_dir), "--title", "Library Shelf", "--no-preview")
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    assert "<title>Library Shelf</title>" in html
 
 
 def test_wall_cli_orders_images_by_date_newest_first(

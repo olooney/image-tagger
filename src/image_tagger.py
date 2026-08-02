@@ -969,6 +969,28 @@ def seeded_wall_sort_key(directory: Path, filepath: Path, seed: int) -> tuple[by
     key_text = f"{seed}\0{relative_filepath}".encode("utf-8", errors="surrogateescape")
     return hashlib.blake2b(key_text, digest_size=16).digest(), relative_filepath
 
+
+def singular_wall_title_word(word: str) -> str:
+    """Return a simple singular display form for a wall title word."""
+    if len(word) > 3 and word.endswith("ies"):
+        return f"{word[:-3]}y"
+    if len(word) > 1 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def wall_title_from_directory(directory: Pathish) -> str:
+    """Return a display title inferred from a wall directory name."""
+    directory_name = Path(directory).name.replace("_", " ").strip()
+    title_words = [
+        singular_wall_title_word(word)
+        for word in re.split(r"\s+", directory_name.casefold())
+        if word
+    ]
+    if not title_words:
+        return "Image Wall"
+    return f"{' '.join(title_words).title()} Wall"
+
 WALL_TITLE_TEMPLATE = """{clean_filename} ({width}x{height})
 Category: {category}
 Genre: {genre}
@@ -1015,6 +1037,7 @@ def generate_wall(
     metadata_filename: Pathish | None = None,
     order: str = "name",
     seed: int | None = None,
+    title: str | None = None,
     verbose: int = 1,
 ) -> Path:
     """Generate a static image wall HTML file."""
@@ -1066,6 +1089,7 @@ def generate_wall(
         items=items,
         cell_width=cell_width,
         cell_height=cell_height,
+        wall_title=title or wall_title_from_directory(directory_path),
     )
     output_path.write_text(output, encoding="utf-8")
     if verbose >= 1:
