@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 import image_tagger as it
+import review_app
 from constants import GALLERY_NAME, METADATA_FILENAME, UPLOAD_DIR, WELCOME_EXTENSIONS
 from convert import (
     convert_images,
@@ -148,9 +149,20 @@ def wall_uploads(args: argparse.Namespace) -> None:
         preview(output_filename)
 
 
+def review_uploads(args: argparse.Namespace) -> None:
+    """Serve an editable metadata review app."""
+    if not args.metadata_filename.is_file():
+        raise SystemExit(f"metadata file not found: {args.metadata_filename}")
+    review_app.review_metadata(args.metadata_filename)
+
+
 def clean_uploads(args: argparse.Namespace) -> None:
     """Remove generated workflow files."""
-    for filename in [args.metadata_filename, args.output_filename]:
+    for filename in [
+        args.metadata_filename,
+        args.metadata_filename.with_suffix(f"{args.metadata_filename.suffix}.bak"),
+        args.output_filename,
+    ]:
         if filename.exists():
             if args.dry_run:
                 print(f"Would remove {filename}")
@@ -269,6 +281,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--preview", action=argparse.BooleanOptionalAction, default=True
     )
     gallery_parser.set_defaults(func=gallery_uploads)
+
+    review_parser = subparsers.add_parser(
+        "review", help="Serve an editable metadata review app."
+    )
+    add_common_upload_args(review_parser)
+    review_parser.set_defaults(func=review_uploads)
 
     wall_parser = subparsers.add_parser(
         "wall", help="Generate a full-window image wall HTML page."

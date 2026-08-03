@@ -23,10 +23,13 @@ shelve *args:
 gallery *args:
     {{python}} src/cli.py gallery {{args}}
 
+review *args:
+    {{python}} src/cli.py review {{args}}
+
 wall *args:
     {{python}} src/cli.py wall {{args}}
 
-run: convert tag rename gallery
+run: convert tag rename review
 
 # test tasks
 

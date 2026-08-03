@@ -18,12 +18,15 @@ dependencies = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.2",
     "pydantic>=2.13.4",
+    "fastapi>=0.116.0",
+    "python-multipart>=0.0.20",
     "pyyaml>=6.0.3",
     "requests>=2.34.2",
     "tenacity>=9.1.4",
     "torch>=2.9.1",
     "transformers>=4.57.3",
     "ty>=0.0.44",
+    "uvicorn>=0.35.0",
     "pytest-cov>=7.1.0",
 ]
 
@@ -31,7 +34,7 @@ dependencies = [
 pythonpath = ["src"]
 
 [tool.setuptools]
-py-modules = ["cli", "constants", "convert", "image_tagger", "util"]
+py-modules = ["cli", "constants", "convert", "image_tagger", "review_app", "util"]
 packages = ["image_tagger_data"]
 
 [tool.setuptools.package-dir]

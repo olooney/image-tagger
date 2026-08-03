@@ -1,0 +1,50 @@
+<form id="row-{{ item.row_id }}" class="gallery-image row mb-4" hx-post="/row/{{ item.row_id }}" hx-target="#row-{{ item.row_id }}" hx-swap="outerHTML">
+    <div class="col-md-6">
+        <img src="{{ item.image_src }}" alt="{{ item.original_filename }}" class="img-fluid">
+    </div>
+    <div class="col-md-6">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+            <div>
+                <h2 class="h5 mb-1">{{ item.current_filename }}</h2>
+            </div>
+            <button type="submit" class="btn btn-primary" disabled>Save</button>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group col-md-6">
+                <label for="category-{{ item.row_id }}">Category</label>
+                <select id="category-{{ item.row_id }}" name="category" class="form-control">
+                    {% for category in categories %}
+                        <option value="{{ category }}"{% if category == item.category %} selected{% endif %}>{{ category }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group col-md-6">
+                <label for="genre-{{ item.row_id }}">Genre</label>
+                <select id="genre-{{ item.row_id }}" name="genre" class="form-control">
+                    {% for genre in genres %}
+                        <option value="{{ genre }}"{% if genre == item.genre %} selected{% endif %}>{{ genre }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="clean-filename-{{ item.row_id }}">Clean Filename</label>
+            <input id="clean-filename-{{ item.row_id }}" name="clean_filename" class="form-control" value="{{ item.clean_filename }}">
+        </div>
+
+        <div class="form-group">
+            <label for="tags-{{ item.row_id }}">Tags</label>
+            <textarea id="tags-{{ item.row_id }}" name="tags" class="form-control tags-field">{{ item.tags_text }}</textarea>
+            <small class="form-text text-muted">Semicolon-separated.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="description-{{ item.row_id }}">Description</label>
+            <textarea id="description-{{ item.row_id }}" name="description" class="form-control description-field">{{ item.description }}</textarea>
+        </div>
+
+        <div class="save-status" aria-live="polite">{% if saved %}Saved.{% endif %}</div>
+    </div>
+</form>

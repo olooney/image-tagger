@@ -10,11 +10,13 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import BaseModel
 
 import cli
 import image_tagger as it
+import review_app
 from constants import WELCOME_EXTENSIONS
 from util import make_unique, quote_display_path
 
@@ -253,6 +255,9 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     uploads_dir = workflow_workspace["uploads"]
     metadata_filename = workflow_workspace["metadata"]
     gallery_filename = workflow_workspace["gallery"]
+    metadata_backup_filename = metadata_filename.with_suffix(
+        f"{metadata_filename.suffix}.bak"
+    )
 
     convert_stdout = run_cli("convert", str(uploads_dir))
     assert (
@@ -316,6 +321,7 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert {row["status"] for row in rows} == {"ok"}
     clean_filenames = {row["original_filename"]: row["clean_filename"] for row in rows}
     assert clean_filenames == TEST_CLEAN_FILENAMES
+    metadata_backup_filename.touch()
 
     rename_stdout = run_cli("rename", str(uploads_dir))
     assert "renaming" in rename_stdout
@@ -359,6 +365,14 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert (workflow_workspace["root"] / "speculative" / "space_station.jpg").exists()
     assert (workflow_workspace["root"] / "vintage" / "antique_camera.tiff").exists()
     assert not (uploads_dir / "picasso.png").exists()
+
+    clean_stdout = run_cli("clean", str(uploads_dir))
+    assert f"Removed {metadata_filename}" in clean_stdout
+    assert f"Removed {metadata_backup_filename}" in clean_stdout
+    assert f"Removed {gallery_filename}" in clean_stdout
+    assert not metadata_filename.exists()
+    assert not metadata_backup_filename.exists()
+    assert not gallery_filename.exists()
 
 
 def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
@@ -463,6 +477,118 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "Keep this one." in html
     assert "This missing file should not render." not in html
     assert "This row should not render." not in html
+
+
+def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
+    """Edit one metadata row through the review app."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    (tmp_path / "art").mkdir()
+    (tmp_path / "memes").mkdir()
+    image_filename = uploads_dir / "sample.jpg"
+    Image.new("RGB", (8, 8), "red").save(image_filename)
+    Image.new("RGB", (8, 8), "blue").save(uploads_dir / "better_name.jpg")
+    metadata_filename = uploads_dir / "image_metadata.csv"
+
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(image_filename),
+                "original_filename": image_filename.name,
+                "width": "8",
+                "height": "8",
+                "category": "art",
+                "genre": "mock",
+                "filename": image_filename.name,
+                "clean_filename": image_filename.name,
+                "filename_already_makes_sense": "True",
+                "tags": "art;mock",
+                "description": "Original description.",
+            }
+        )
+
+    review_app.set_review_metadata(metadata_filename)
+    client = TestClient(review_app.app)
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Image Metadata Review" in response.text
+    assert image_filename.name in response.text
+    assert "Metadata:" not in response.text
+    assert "Rows:" not in response.text
+    assert "Shelve" in response.text
+
+    response = client.post(
+        "/row/1",
+        data={
+            "category": "memes",
+            "genre": "joke",
+            "clean_filename": "better_name.jpg",
+            "tags": "meme;mock",
+            "description": "Updated description.",
+        },
+    )
+    assert response.status_code == 200
+    assert "Saved." in response.text
+    assert "memes" in response.text
+    assert "better_name2.jpg" in response.text
+
+    with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
+        updated_row = next(csv.DictReader(metadata_file))
+    assert updated_row["category"] == "memes"
+    assert updated_row["genre"] == "joke"
+    assert updated_row["clean_filename"] == "better_name2.jpg"
+    assert updated_row["tags"] == "meme;mock"
+    assert updated_row["description"] == "Updated description."
+    assert not image_filename.exists()
+    assert (uploads_dir / "better_name2.jpg").exists()
+
+    response = client.post(
+        "/row/1",
+        data={
+            "category": "memes",
+            "genre": "joke",
+            "clean_filename": "final_name.jpg",
+            "tags": "meme;mock",
+            "description": "Updated description.",
+        },
+    )
+    assert response.status_code == 200
+    assert "final_name.jpg" in response.text
+
+    with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
+        updated_row = next(csv.DictReader(metadata_file))
+    assert updated_row["clean_filename"] == "final_name.jpg"
+    assert not (uploads_dir / "better_name2.jpg").exists()
+    assert (uploads_dir / "final_name.jpg").exists()
+    assert metadata_filename.with_suffix(".csv.bak").exists()
+
+    response = client.post("/shelve")
+    assert response.status_code == 200
+    assert "moving uploads/final_name.jpg to memes/final_name.jpg ...success!" in response.text
+    assert not (uploads_dir / "final_name.jpg").exists()
+    assert (tmp_path / "memes" / "final_name.jpg").exists()
+
+
+def test_review_cli_exits_if_metadata_is_missing(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Require metadata before starting the review app."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_cli("review", str(uploads_dir))
+
+    assert exc_info.value.code == f"metadata file not found: {uploads_dir / 'image_metadata.csv'}"
 
 
 def test_gallery_cli_defaults_output_to_selected_directory(

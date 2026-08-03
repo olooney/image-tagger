@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Metadata Review</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        .save-status { min-height: 1.5rem; color: #2f6f3e; }
+        .btn-primary:disabled {
+            border-color: #999;
+            background-color: #bbb;
+            color: #555;
+            opacity: 1;
+        }
+        textarea.description-field { min-height: 15rem; }
+        textarea.tags-field { min-height: 4rem; }
+        .shelve-report {
+            padding: 1rem;
+            border: 1px solid #ccc;
+            background-color: #f8f9fa;
+            white-space: pre-wrap;
+        }
+    </style>
+    <script>
+        const markDirty = (event) => {
+            const form = event.target.closest('form');
+            if (form) {
+                form.querySelector('button[type="submit"]').disabled = false;
+                form.querySelector('.save-status').textContent = '';
+            }
+        };
+
+        document.addEventListener('input', markDirty);
+        document.addEventListener('change', markDirty);
+    </script>
+</head>
+<body>
+    <header class="py-3" style="background-color: #800000; font-family: Garamond, 'Times New Roman', serif;">
+        <div class="container">
+            <h1 class="text-left">
+                <a href="/" style="color: white; text-decoration: none;">
+                    Image Metadata Review
+                </a>
+            </h1>
+        </div>
+    </header>
+
+    <div class="container mt-3">
+        <div class="mb-4 d-flex align-items-start">
+            <button type="button" class="btn btn-primary" hx-post="/shelve" hx-target="#shelve-output" hx-swap="innerHTML">
+                Shelve
+            </button>
+        </div>
+        <div id="shelve-output" class="mb-4"></div>
+    </div>
+
+    <div class="container">
+        {% for item in items %}
+            {% include "review_card.html" %}
+        {% endfor %}
+    </div>
+</body>
+</html>
