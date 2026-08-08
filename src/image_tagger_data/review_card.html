@@ -7,7 +7,10 @@
             <div>
                 <h2 class="h5 mb-1">{{ item.current_filename }}</h2>
             </div>
-            <button type="submit" class="btn btn-primary" disabled>Save</button>
+            <div class="btn-group" role="group" aria-label="Review actions">
+                <button type="submit" class="btn btn-primary" disabled>Save</button>
+                <button type="button" class="btn btn-danger" hx-delete="/row/{{ item.row_id }}" hx-target="#row-{{ item.row_id }}" hx-swap="outerHTML">Delete</button>
+            </div>
         </div>
 
         <div class="form-row">

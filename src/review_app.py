@@ -201,6 +201,31 @@ def write_metadata_row(metadata_path: Path, row_id: int, updates: dict[str, str]
             time.sleep(0.25)
 
 
+def delete_metadata_row_image(metadata_path: Path, row_id: int) -> None:
+    """Delete the current image for one one-based CSV row and hide it from review."""
+    metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
+    row_index = row_id - 1
+    if row_index < 0 or row_index >= len(metadata_df):
+        raise ValueError(f"Unknown row id: {row_id}")
+
+    row = cast("pd.Series[Any]", metadata_df.iloc[row_index])
+    image_path = current_image_path(row)
+    if image_path is not None:
+        image_path.unlink()
+    metadata_df.at[row_index, "status"] = "deleted"
+
+    backup_path = metadata_path.with_suffix(f"{metadata_path.suffix}.bak")
+    shutil.copy2(metadata_path, backup_path)
+    for attempt in range(5):
+        try:
+            metadata_df.to_csv(metadata_path, index=False)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.25)
+
+
 def render_card(
     item: dict[str, Any],
     categories: list[str],
@@ -213,6 +238,31 @@ def render_card(
         categories=categories,
         genres=genres,
         saved=saved,
+    )
+
+
+def render_review_list(
+    items: list[dict[str, Any]],
+    categories: list[str],
+    genres: list[str],
+) -> str:
+    """Render the current review cards."""
+    return "".join(render_card(item, categories, genres) for item in items)
+
+
+def render_shelve_response(metadata_path: Path, output: str) -> str:
+    """Render the shelve report and refreshed review card list."""
+    categories = review_category_options(metadata_path)
+    genres = review_genre_options(metadata_path)
+    items = review_items(metadata_path)
+    report = f'<pre class="shelve-report">{html.escape(output)}</pre>'
+    return "".join(
+        [
+            report,
+            '<div id="review-list" hx-swap-oob="innerHTML">',
+            render_review_list(items, categories, genres),
+            "</div>",
+        ]
     )
 
 
@@ -236,8 +286,10 @@ async def home() -> str:
     metadata_path = review_metadata_path()
     categories = review_category_options(metadata_path)
     genres = review_genre_options(metadata_path)
+    items = review_items(metadata_path)
     return page_template.render(
-        items=review_items(metadata_path),
+        items=items,
+        review_list=render_review_list(items, categories, genres),
         categories=categories,
         genres=genres,
         metadata_filename=metadata_path,
@@ -269,14 +321,22 @@ async def update_row(row_id: int, request: Request) -> str:
     )
 
 
+@app.delete("/row/{row_id}", response_class=HTMLResponse)
+async def delete_row(row_id: int) -> str:
+    """Delete one reviewed image and remove its card."""
+    delete_metadata_row_image(review_metadata_path(), row_id)
+    return ""
+
+
 @app.post("/shelve", response_class=HTMLResponse)
 async def shelve() -> str:
     """Shelve reviewed images and return the operation report."""
+    metadata_path = review_metadata_path()
     stdout = StringIO()
     with redirect_stdout(stdout):
-        it.shelve_images(review_metadata_path(), verbose=1)
+        it.shelve_images(metadata_path, verbose=1)
     output = stdout.getvalue().strip() or "No images moved."
-    return f'<pre class="shelve-report">{html.escape(output)}</pre>'
+    return render_shelve_response(metadata_path, output)
 
 
 def review_metadata(

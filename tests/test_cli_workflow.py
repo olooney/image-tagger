@@ -523,6 +523,53 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     assert image_filename.name in response.text
     assert "Metadata:" not in response.text
     assert "Rows:" not in response.text
+    assert "Delete" in response.text
+    assert "No images to review." in response.text
+    assert '<p id="empty-review-message" class="alert alert-info" role="status" hidden>' in response.text
+    assert '<div id="shelve-controls" class="mb-4 d-flex align-items-start" hidden>' in response.text
+
+    response = client.delete("/row/1")
+    assert response.status_code == 200
+    assert response.text == ""
+    assert not image_filename.exists()
+
+    with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
+        deleted_row = next(csv.DictReader(metadata_file))
+    assert deleted_row["status"] == "deleted"
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "No images to review." in response.text
+    assert '<p id="empty-review-message" class="alert alert-info" role="status" hidden>' not in response.text
+    assert '<div id="shelve-controls" class="mb-4 d-flex align-items-start" hidden>' not in response.text
+
+    Image.new("RGB", (8, 8), "red").save(image_filename)
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(image_filename),
+                "original_filename": image_filename.name,
+                "width": "8",
+                "height": "8",
+                "category": "art",
+                "genre": "mock",
+                "filename": image_filename.name,
+                "clean_filename": image_filename.name,
+                "filename_already_makes_sense": "True",
+                "tags": "art;mock",
+                "description": "Original description.",
+            }
+        )
+
+    response = client.get("/")
+    assert response.status_code == 200
     assert "Shelve" in response.text
 
     response = client.post(
@@ -573,6 +620,8 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     response = client.post("/shelve")
     assert response.status_code == 200
     assert "moving uploads/final_name.jpg to memes/final_name.jpg ...success!" in response.text
+    assert 'id="review-list" hx-swap-oob="innerHTML"' in response.text
+    assert response.text.endswith('hx-swap-oob="innerHTML"></div>')
     assert not (uploads_dir / "final_name.jpg").exists()
     assert (tmp_path / "memes" / "final_name.jpg").exists()
 
