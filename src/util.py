@@ -72,7 +72,10 @@ def display_path(
     """Format a path for verbose output."""
     display_path = Path(path)
     if verbose == 1:
-        display = display_path.relative_to(relative_to).as_posix()
+        try:
+            display = display_path.relative_to(relative_to).as_posix()
+        except ValueError:
+            display = os.fspath(display_path)
     else:
         display = os.fspath(display_path)
     return quote_display_path(display)

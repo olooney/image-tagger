@@ -7,7 +7,8 @@ from typing import Any, cast
 from PIL import Image
 from pillow_heif import register_heif_opener
 
-from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS, UPLOAD_DIR
+from constants import IMAGE_EXTENSIONS, UNWELCOME_EXTENSIONS
+from stackmap import StackMap, find_stackmap
 from util import Pathish, display_file_operation, make_unique, quote_display_path
 
 register_heif_opener()
@@ -365,4 +366,7 @@ def main(
 
 
 if __name__ == "__main__":
-    main(UPLOAD_DIR)
+    stackmap_filename = find_stackmap()
+    if stackmap_filename is None:
+        raise SystemExit("could not find .stackmap; run through the CLI or pass a directory.")
+    main(StackMap.load(stackmap_filename).default_directory)

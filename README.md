@@ -16,7 +16,7 @@ lossless or uncompressed formats to PNG and lossy formats to JPEG.
 
 Prepare a static HTML gallery of images and metadata.
 
-Move tagged images into sibling category directories.
+Move tagged images into configured library shelf directories.
 
 
 Sample Gallery
@@ -48,8 +48,26 @@ the file contents do not match the name, converts lossless or uncompressed
 formats such as BMP and GIF to PNG, converts lossy formats such as WEBP, AVIF,
 and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
-If `DIRECTORY` is omitted, the tools use the configured uploads folder. By
-default, metadata is written to `image_metadata.csv` inside that directory.
+Every command uses a `.stackmap` configuration file. The CLI searches upward
+from the directory where it was run, then falls back to `~/.stackmap`; pass
+`--stackmap PATH` to use a specific file. Shelf names are identifiers, and
+paths may be absolute or relative to the `.stackmap` file itself:
+
+```yaml
+default: shelves/inbox
+art: shelves/art
+books: shelves/books
+```
+
+If `DIRECTORY` is omitted, tools use the `default` shelf. The `default` shelf
+is an inbox and never a tagging category; every other shelf name is the
+authoritative category list passed to the vision model. Metadata is written to
+`image_metadata.csv` inside the selected directory.
+
+Every `DIRECTORY` argument also accepts a shelf alias. Aliases take precedence
+over same-named local directories, while unknown names remain local relative
+paths. For example, `just dedupe books` uses the configured `books` shelf, and
+`just dedupe ghosts` uses `./ghosts` when `ghosts` is not configured.
 
 `just dedupe` removes duplicate images under `DIRECTORY`. CLIP scores at or
 above `--automatic-threshold` are removed automatically; scores at or above
@@ -96,7 +114,7 @@ clean filenames, you can use:
 it.rename_images(metadata_filename, verbose=1, dry_run=False)
 ```
 
-Finally, run:
+Finally, with a `StackMap` loaded from your `.stackmap`, run:
 
 ```python
 it.generate_gallery(metadata_filename, gallery_filename)
@@ -111,7 +129,7 @@ To move renamed images into sibling directories matching the tagged category
 such as `../books/`, create those directories first and run:
 
 ```python
-it.shelve_images(metadata_filename, verbose=1, dry_run=False)
+it.shelve_images(metadata_filename, stackmap=stackmap, verbose=1, dry_run=False)
 ```
 
 Source

@@ -13,14 +13,17 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import BaseModel
+from send2trash.exceptions import TrashPermissionError
 
 import cli
 import image_tagger as it
 import review_app
 from constants import WELCOME_EXTENSIONS
-from util import make_unique, quote_display_path
+from stackmap import StackMap, find_stackmap
+from util import display_path, make_unique, quote_display_path
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
+TEST_STACKMAP_TEMPLATE: Path = REPO_ROOT / "tests" / ".stackmap"
 
 
 CATEGORIES: list[str] = [
@@ -212,14 +215,27 @@ def workflow_workspace(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def write_test_stackmap(directory: Path) -> StackMap:
+    """Copy the versioned relative stack map beside a test workspace."""
+    stackmap_filename = directory.parent / ".stackmap"
+    shutil.copy2(TEST_STACKMAP_TEMPLATE, stackmap_filename)
+    return StackMap.load(stackmap_filename)
+
+
 @pytest.fixture
 def run_cli(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
     """Run the CLI and capture stdout."""
 
     def runner(*args: str) -> str:
         """Run one CLI command."""
+        directory = Path(args[1])
+        stackmap = write_test_stackmap(directory)
         stdout = StringIO()
-        monkeypatch.setattr(sys, "argv", ["cli.py", *args])
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["cli.py", args[0], str(directory), "--stackmap", str(stackmap.filename), *args[2:]],
+        )
         with redirect_stdout(stdout):
             cli.main()
         return stdout.getvalue()
@@ -244,6 +260,77 @@ def run_tag(
         return run_cli("tag", str(uploads_dir), *args)
 
     return runner
+
+
+def test_stackmap_resolves_relative_shelves_and_discovers_parent(
+    tmp_path: Path,
+) -> None:
+    """Resolve shelf paths from the map and find parent configurations."""
+    workspace = tmp_path / "library"
+    nested_directory = workspace / "work" / "images"
+    nested_directory.mkdir(parents=True)
+    stackmap_filename = workspace / ".stackmap"
+    stackmap_filename.write_text(
+        "default: shelves/inbox\nart: shelves/art\n",
+        encoding="utf-8",
+    )
+
+    stackmap = StackMap.load(stackmap_filename)
+
+    assert stackmap.default_directory == workspace / "shelves" / "inbox"
+    assert stackmap.categories == ["art"]
+    assert stackmap.directory_for("art") == workspace / "shelves" / "art"
+    assert find_stackmap(nested_directory) == stackmap_filename
+
+
+def test_image_tag_response_schema_allows_only_configured_categories() -> None:
+    """Constrain vision task categories to the configured shelves."""
+    schema = it.image_tag_response_model(["art", "books"]).model_json_schema()
+
+    assert schema["properties"]["category"]["enum"] == ["art", "books"]
+
+
+def test_cli_directory_alias_uses_stackmap_before_local_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a configured shelf alias before a same-named local directory."""
+    local_directory = tmp_path / "books"
+    shelf_directory = tmp_path / "shelves" / "books"
+    local_directory.mkdir()
+    shelf_directory.mkdir(parents=True)
+    stackmap_filename = tmp_path / ".stackmap"
+    stackmap_filename.write_text(
+        f"default: {local_directory}\nbooks: {shelf_directory}\n",
+        encoding="utf-8",
+    )
+    calls: list[Path] = []
+
+    def fake_dedupe(directory: Path, **kwargs: object) -> list[it.ImageDuplicateMatch]:
+        calls.append(directory)
+        return []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(it, "dedupe_images", fake_dedupe)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["cli.py", "dedupe", "books", "--stackmap", str(stackmap_filename), "-q"],
+    )
+
+    cli.main()
+
+    local_fallback_directory = tmp_path / "ghosts"
+    local_fallback_directory.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["cli.py", "dedupe", "ghosts", "--stackmap", str(stackmap_filename), "-q"],
+    )
+
+    cli.main()
+
+    assert calls == [shelf_directory, Path("ghosts")]
 
 
 def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
@@ -514,7 +601,10 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
             }
         )
 
-    review_app.set_review_metadata(metadata_filename)
+    review_app.set_review_metadata(
+        metadata_filename,
+        write_test_stackmap(uploads_dir),
+    )
     client = TestClient(review_app.app)
 
     response = client.get("/")
@@ -929,6 +1019,16 @@ def test_make_unique_raises_after_suffix_nine(
         make_unique(tmp_path / "image.jpg")
 
 
+def test_display_path_uses_absolute_path_outside_relative_root(tmp_path: Path) -> None:
+    """Display configured shelves outside the workspace without failing."""
+    workspace = tmp_path / "workspace"
+    shelf = tmp_path / "shelf" / "image.jpg"
+    workspace.mkdir()
+    shelf.parent.mkdir()
+
+    assert display_path(shelf, verbose=1, relative_to=workspace) == str(shelf)
+
+
 def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
     tmp_path: Path,
     run_cli: Callable[..., str],
@@ -989,6 +1089,45 @@ def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
         "moving uploads/handwritten_note.jpg to diagrams/handwritten_note.jpg ...success!"
         in output
     )
+
+
+def test_shelve_verbosity_one_handles_shelves_outside_stackmap_directory(
+    tmp_path: Path,
+) -> None:
+    """Move between independently located configured shelves."""
+    config_directory = tmp_path / "project"
+    uploads_dir = tmp_path / "uploads"
+    diagrams_dir = tmp_path / "diagrams"
+    config_directory.mkdir()
+    uploads_dir.mkdir()
+    diagrams_dir.mkdir()
+    stackmap_filename = config_directory / ".stackmap"
+    stackmap_filename.write_text(
+        f"default: {uploads_dir}\ndiagrams: {diagrams_dir}\n",
+        encoding="utf-8",
+    )
+    source = uploads_dir / "handwritten_note.jpg"
+    source.touch()
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "category": "diagrams",
+                "original_filepath": str(source),
+                "original_filename": source.name,
+                "clean_filename": source.name,
+            }
+        )
+
+    stdout = StringIO()
+    with redirect_stdout(stdout):
+        it.shelve_images(metadata_filename, stackmap=StackMap.load(stackmap_filename))
+
+    assert f"moving {source} to {diagrams_dir / source.name} ...success!" in stdout.getvalue()
+    assert (diagrams_dir / source.name).is_file()
 
 
 def test_shelve_appends_metadata_to_target_directory_after_unique_filename(
@@ -1337,6 +1476,8 @@ def test_dedupe_image_matches_uses_llm_for_borderline_candidates(
     assert len(client_adapter.calls) == 1
     assert 'Left file: "left.jpg" (4x5)' in client_adapter.prompts[0]
     assert 'Right file: "right.jpg" (6x7)' in client_adapter.prompts[0]
+    assert "tightly framed, fronto-parallel cover image" in client_adapter.prompts[0]
+    assert "keystone distortion" in client_adapter.prompts[0]
     assert len(matches) == (0 if keep == "both" else 1)
     if keep != "both":
         assert matches[0].decision_source == "llm"
@@ -1408,6 +1549,14 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
             )
         ],
     )
+    recycled_paths: list[Path] = []
+
+    def fake_send2trash(path: Path) -> None:
+        """Record the recycle action without changing the system recycle bin."""
+        recycled_paths.append(path)
+        path.unlink()
+
+    monkeypatch.setattr(it, "send2trash", fake_send2trash)
     dry_run_args = ("--dry-run",) if dry_run else ()
 
     output = run_cli("dedupe", str(uploads_dir), *dry_run_args)
@@ -1415,6 +1564,41 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
     assert output.splitlines()[0] == f"working in {quote_display_path(uploads_dir)}"
     assert "removing duplicate duplicate.jpg to kept.jpg ...success!" in output
     assert duplicate.exists() is dry_run
+    assert recycled_paths == ([] if dry_run else [duplicate])
+    assert kept.exists()
+
+
+def test_dedupe_permanently_deletes_when_recycle_bin_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fall back to deletion when no recycle bin is available."""
+    kept = tmp_path / "kept.jpg"
+    duplicate = tmp_path / "duplicate.jpg"
+    kept.touch()
+    duplicate.touch()
+    monkeypatch.setattr(
+        it,
+        "dedupe_image_matches",
+        lambda *args, **kwargs: [
+            it.ImageDuplicateMatch(
+                score=1.0,
+                left_path=kept,
+                right_path=duplicate,
+                decision_source="clip",
+            )
+        ],
+    )
+
+    def unavailable_trash(path: Path) -> None:
+        """Simulate a filesystem without a usable recycle bin."""
+        raise TrashPermissionError(path)
+
+    monkeypatch.setattr(it, "send2trash", unavailable_trash)
+
+    it.dedupe_images(tmp_path, verbose=0)
+
+    assert not duplicate.exists()
     assert kept.exists()
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import image_tagger as it
 import review_app
-from constants import GALLERY_NAME, METADATA_FILENAME, UPLOAD_DIR, WELCOME_EXTENSIONS
+from constants import GALLERY_NAME, METADATA_FILENAME, WELCOME_EXTENSIONS
 from convert import (
     convert_images,
     count_files_by_extension,
@@ -14,6 +14,7 @@ from convert import (
     rename_jpeg_to_jpg,
 )
 from util import preview, quote_display_path
+from stackmap import StackMap, find_stackmap
 
 
 def path_arg(value: str) -> Path:
@@ -62,6 +63,7 @@ def tag_uploads(args: argparse.Namespace) -> None:
         verbose=args.verbose,
         provider=args.provider,
         instructions_filename=args.instructions_filename,
+        categories=args.stackmap_config.categories,
     )
 
 
@@ -90,6 +92,7 @@ def shelve_uploads(args: argparse.Namespace) -> None:
     """Move uploads into category folders."""
     it.shelve_images(
         args.metadata_filename,
+        stackmap=args.stackmap_config,
         verbose=args.verbose,
         dry_run=args.dry_run,
     )
@@ -153,7 +156,7 @@ def review_uploads(args: argparse.Namespace) -> None:
     """Serve an editable metadata review app."""
     if not args.metadata_filename.is_file():
         raise SystemExit(f"metadata file not found: {args.metadata_filename}")
-    review_app.review_metadata(args.metadata_filename)
+    review_app.review_metadata(args.metadata_filename, stackmap=args.stackmap_config)
 
 
 def clean_uploads(args: argparse.Namespace) -> None:
@@ -175,7 +178,12 @@ def clean_uploads(args: argparse.Namespace) -> None:
 
 def add_common_upload_args(parser: argparse.ArgumentParser) -> None:
     """Add arguments shared by upload commands."""
-    parser.add_argument("directory", nargs="?", type=path_arg, default=UPLOAD_DIR)
+    parser.add_argument("directory", nargs="?", type=path_arg)
+    parser.add_argument(
+        "--stackmap",
+        type=path_arg,
+        help="Path to the library shelf map. Defaults to a discovered .stackmap file.",
+    )
     parser.add_argument("--metadata-filename", type=path_arg)
     parser.set_defaults(verbose=1)
     parser.add_argument(
@@ -261,7 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     rename_parser.set_defaults(func=rename_uploads)
 
     shelve_parser = subparsers.add_parser(
-        "shelve", help="Move uploads into sibling category directories."
+        "shelve", help="Move uploads into configured category shelves."
     )
     add_common_upload_args(shelve_parser)
     shelve_parser.set_defaults(func=shelve_uploads)
@@ -318,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
         "clean", help="Remove generated metadata and gallery files."
     )
     add_common_upload_args(clean_parser)
-    clean_parser.add_argument("--output-filename", type=path_arg, default=GALLERY_NAME)
+    clean_parser.add_argument("--output-filename", type=path_arg)
     clean_parser.set_defaults(func=clean_uploads)
 
     return parser
@@ -328,8 +336,23 @@ def main() -> None:
     """Run the selected CLI command."""
     parser = build_parser()
     args = parser.parse_args()
+    stackmap_filename = args.stackmap or find_stackmap()
+    if stackmap_filename is None:
+        raise SystemExit("could not find .stackmap; pass --stackmap to specify one.")
+    try:
+        args.stackmap_config = StackMap.load(stackmap_filename)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    if args.directory is None:
+        args.directory = args.stackmap_config.default_directory
+    else:
+        args.directory = (
+            args.stackmap_config.directory_for(str(args.directory)) or args.directory
+        )
     if args.metadata_filename is None:
         args.metadata_filename = args.directory / METADATA_FILENAME.name
+    if args.command == "clean" and args.output_filename is None:
+        args.output_filename = args.directory / GALLERY_NAME.name
     args.verbose += args.verbose_delta - args.quiet_delta
     args.func(args)
 

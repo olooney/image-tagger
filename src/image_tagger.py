@@ -25,9 +25,12 @@ import numpy as np
 import pandas as pd
 import requests
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
+from send2trash import send2trash
+from send2trash.exceptions import TrashPermissionError
 
 from constants import WELCOME_EXTENSIONS
+from stackmap import StackMap
 from util import (
     Pathish,
     TemporarySeed,
@@ -47,6 +50,18 @@ class ImageTagData(BaseModel):
     tags: list[str]
     filename_already_makes_sense: bool
     filename: str
+
+
+def image_tag_response_model(categories: list[str]) -> type[BaseModel]:
+    """Build the tagging schema for the configured shelf aliases."""
+    if not categories:
+        raise ValueError("stack map must define at least one non-default shelf for tagging.")
+    category_type = Literal.__getitem__(tuple(categories))
+    return create_model(
+        "ConfiguredImageTagData",
+        __base__=ImageTagData,
+        category=(category_type, ...),
+    )
 
 
 class SameImageJudgement(BaseModel):
@@ -647,6 +662,7 @@ def tag_image(
     filepath: Pathish,
     client_adapter: VisionModelClientAdapter,
     prompt_template: str = IMAGE_PROMPT_TEMPLATE,
+    categories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Tag a single image with a vision model."""
     # handle local or remote images
@@ -665,14 +681,20 @@ def tag_image(
     base64_image_data = base64_encode_image(image)
 
     # run the tagging vision task and record the time it took
-    prompt = prompt_template.format(filename=filename)
+    prompt = prompt_template.format(
+        filename=filename,
+        categories=", ".join(f'"{category}"' for category in categories or []),
+    )
     vision_start_time = time.perf_counter()
-    response = client_adapter.vision_task(base64_image_data, prompt, ImageTagData)
+    response_format = (
+        image_tag_response_model(categories) if categories is not None else ImageTagData
+    )
+    response = client_adapter.vision_task(base64_image_data, prompt, response_format)
     vision_duration = time.perf_counter() - vision_start_time
     data = json.loads(response.content)
 
     # validate the response
-    ImageTagData(**data)
+    response_format(**data)
 
     # clean up the suggested filename and fix the extension if necessary
     suggested_filename = clean_filename(data.get("filename", None))
@@ -699,6 +721,7 @@ def tag_images(
     verbose: int = 1,
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
     instructions_filename: Pathish | None = None,
+    categories: list[str] | None = None,
 ) -> None:
     """Tag images and write metadata rows."""
     output_path = Path(output_filename)
@@ -726,7 +749,12 @@ def tag_images(
 
                 try:
                     # run the model and normalize row fields for CSV output
-                    row = tag_image(filepath, client_adapter, prompt_template)
+                    row = tag_image(
+                        filepath,
+                        client_adapter,
+                        prompt_template,
+                        categories,
+                    )
                     duration = row.pop("vision_duration")
                     vision_durations.append(duration)
                     row["tags"] = ";".join(tag.lower().strip() for tag in row["tags"])
@@ -862,7 +890,7 @@ def dedupe_images(
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
     batch_size: int = 32,
 ) -> list[ImageDuplicateMatch]:
-    """Remove duplicate images from a directory."""
+    """Send duplicate images from a directory to the recycle bin."""
     directory_path = Path(directory)
     image_paths = sorted(find_images(directory_path))
     if verbose == 1:
@@ -895,7 +923,10 @@ def dedupe_images(
             )
         try:
             if not dry_run:
-                duplicate.unlink()
+                try:
+                    send2trash(duplicate)
+                except TrashPermissionError:
+                    duplicate.unlink()
             removed_paths.add(duplicate)
             if verbose >= 1:
                 print("success!")
@@ -1223,14 +1254,14 @@ def append_shelved_metadata(
 
 def shelve_images(
     csv_filename: Pathish,
+    stackmap: StackMap,
     verbose: int = 1,
     dry_run: bool = False,
 ) -> None:
     """Move images into category folders."""
     csv_path = Path(csv_filename)
     metadata_df = pd.read_csv(csv_path)
-    upload_directory = csv_path.parent
-    display_directory = upload_directory.parent
+    display_directory = stackmap.filename.parent
     if verbose == 1:
         print(f"working in {quote_display_path(display_directory)}")
     for index, row in metadata_df.iterrows():
@@ -1252,7 +1283,11 @@ def shelve_images(
             continue
 
         category = str(row["category"]).strip()
-        target_directory = source.parent.parent / category
+        target_directory = stackmap.directory_for(category)
+        if target_directory is None or category == "default":
+            if verbose >= 1:
+                print(f"category {category!r} is not a configured shelf; skipping {source!r}")
+            continue
         if not target_directory.is_dir():
             if verbose >= 1:
                 print(

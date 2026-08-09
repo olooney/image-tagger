@@ -69,50 +69,12 @@ information from the image itself:
 
 ## Assign Category
 
-The category should be one of:
+Choose exactly one category from this authoritative list of library shelves:
 
-    "ai", "art", "books", "comics", "diagrams", "horror",
-    "hygge", "memes", "photography", "speculative", "vintage"
+    {categories}
 
-"ai" is for obviously AI-generated imagery.
-
-"art" includes sculptures, paintings, anime/manga
-
-"books" specifically means the image is entirely a book cover. Sometimes
-several book covers will be shown in a collage, or the back cover will
-also be shown. Book covers can be distinguished from other art by presence
-of typographic elements such as title, author, etc.
-
-A "comic" is any illustration with a simple style and embedded text, regardless of humor.
-
-Use "diagrams" for any map, chart, plot, technical diagram, or explanatory diagram.
-
-Use "horror" for the kind of stuff you'd see in a horror movie.
-
-The "hygge" category is for cozy images invoking warmth, autumn, cooking,
-calm spaces such as libraries, desks, or kitchens. These can be illustrations,
-comics, or photographs, and this category takes precedence over any of those
-if it matches the theme.
-
-Use "memes" for any image which prominently features overlay text and which
-seems to be funny, sad, whimsical, or otherwise non-serious and non-technical.
-
-"photography" is for real photos of real objects.
-
-"speculative" means art with a sci-fi or fantasy theme, often concept art or
-video game art. This category takes precedence over "art", but not over "books".
-
-"vintage" specifically means vintage illustrations or early black-and-white
-photographs.
-
-When multiple categories seem possible, choose the first matching category in this order:
-
-    "ai", "books", "hygge", "speculative", "vintage", "diagrams", "memes",
-    "horror", "comics", "photography", "art"
-
-Only one category can be chosen! You MUST choose one of the categories on this
-list. Use the exact string; for example, NEVER use "meme", "photos", "book",
-or other such variant.
+The `default` shelf is intentionally excluded because it is an inbox, not a
+category. Use the exact configured identifier and do not invent variants.
 
 ## Assign Genre
 

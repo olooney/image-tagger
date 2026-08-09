@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 import image_tagger as it
+from stackmap import StackMap
 from util import Pathish, make_unique
 
 
@@ -53,9 +54,10 @@ GENRE_OPTIONS: list[str] = [
 ]
 
 
-def set_review_metadata(metadata_filename: Pathish) -> None:
+def set_review_metadata(metadata_filename: Pathish, stackmap: StackMap) -> None:
     """Set the metadata file used by the review app."""
     app.state.metadata_path = Path(metadata_filename)
+    app.state.stackmap = stackmap
 
 
 def review_metadata_path() -> Path:
@@ -64,6 +66,14 @@ def review_metadata_path() -> Path:
     if metadata_path is None:
         raise RuntimeError("Review metadata path has not been configured.")
     return cast("Path", metadata_path)
+
+
+def review_stackmap() -> StackMap:
+    """Return the configured shelf map."""
+    stackmap = getattr(app.state, "stackmap", None)
+    if stackmap is None:
+        raise RuntimeError("Review stack map has not been configured.")
+    return cast("StackMap", stackmap)
 
 
 def first_available_port(start_port: int = 8001) -> int:
@@ -334,7 +344,7 @@ async def shelve() -> str:
     metadata_path = review_metadata_path()
     stdout = StringIO()
     with redirect_stdout(stdout):
-        it.shelve_images(metadata_path, verbose=1)
+        it.shelve_images(metadata_path, stackmap=review_stackmap(), verbose=1)
     output = stdout.getvalue().strip() or "No images moved."
     return render_shelve_response(metadata_path, output)
 
@@ -342,12 +352,13 @@ async def shelve() -> str:
 def review_metadata(
     metadata_filename: Pathish,
     *,
+    stackmap: StackMap,
     start_port: int = 8001,
 ) -> None:
     """Serve a local metadata review app and open it in a browser."""
     import uvicorn
 
-    set_review_metadata(metadata_filename)
+    set_review_metadata(metadata_filename, stackmap)
     port = first_available_port(start_port)
     url = f"http://127.0.0.1:{port}"
     webbrowser.open(url)

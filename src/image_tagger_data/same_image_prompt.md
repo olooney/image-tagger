@@ -10,6 +10,8 @@ better (for example, if both are damaged in different ways but to a similar degr
 
 If they are duplicates and you must choose one, keep the larger, higher-quality image. Prefer the version without cropping, added text, borders, letterboxing, watermarks, or artificial overlays. Prefer natural color grading, exposure, and contrast over heavy filters or degraded compression.
 
+For book covers, strongly prefer a tightly framed, fronto-parallel cover image with little or no surrounding background. This takes precedence over pixel dimensions: prefer it over a larger image with table or backdrop visible, or with keystone distortion from an oblique camera angle.
+
 Treat changes in crop, scale, compression, color filtering, exposure, contrast, letterboxing, and small border bars as minor only when the images still appear to come from the same original picture. Return "both" for merely similar subjects, compositions, styles, or scenes.
 
 If there is no meaningful difference in the images, choose the one that has the cleaner, more meaningful filename.

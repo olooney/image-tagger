@@ -1,8 +1,7 @@
 from pathlib import Path
 
-UPLOAD_DIR: Path = Path(r"C:\Users\oloon\Dropbox\images\uploads")
-METADATA_FILENAME: Path = UPLOAD_DIR / "image_metadata.csv"
-GALLERY_NAME: Path = UPLOAD_DIR / "index.html"
+METADATA_FILENAME: Path = Path("image_metadata.csv")
+GALLERY_NAME: Path = Path("index.html")
 
 IMAGE_EXTENSIONS: list[str] = [
     ".jpg",
