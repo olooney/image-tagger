@@ -69,7 +69,7 @@ information from the image itself:
 
 ## Assign Category
 
-Choose exactly one category from this authoritative list of library shelves:
+Choose exactly one category from this authoritative list of library shelves.
 
     {categories}
 

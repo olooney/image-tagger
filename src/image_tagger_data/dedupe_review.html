@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Duplicate Review</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .dedupe-image {
+            display: block;
+            width: 100%;
+            max-width: 500px;
+            max-height: 750px;
+            height: auto;
+            object-fit: contain;
+        }
+        .unavailable {
+            color: #555;
+            padding: 0.5rem 0;
+        }
+        .path { overflow-wrap: anywhere; }
+        .action { color: #800000; font-weight: bold; }
+        .reason { white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <header class="py-3" style="background-color: #800000; font-family: Garamond, 'Times New Roman', serif;">
+        <div class="container">
+            <h1 class="text-left">
+                <a href="#" style="color: white; text-decoration: none;">Duplicate Review</a>
+            </h1>
+        </div>
+    </header>
+    <main class="container mt-5">
+        <div class="row">
+            <div class="col-12">
+                <h2>{{ entries | length }} duplicate decision{% if entries | length != 1 %}s{% endif %}</h2>
+                <hr>
+            </div>
+        </div>
+        {% if entries %}
+            {% for entry in entries %}
+                <article class="row mb-4 pb-4 border-bottom">
+                    <section class="col-md-3 mb-3" aria-label="Left image">
+                        <figure class="mb-0">
+                            {% if entry.left_image_src %}
+                                <img class="dedupe-image" src="{{ entry.left_image_src }}" alt="Left image: {{ entry.left_path.name }}">
+                            {% else %}
+                                <div class="unavailable">Thumbnail unavailable</div>
+                            {% endif %}
+                            <figcaption class="path mt-2">{{ entry.left_path.name }}</figcaption>
+                        </figure>
+                    </section>
+                    <section class="col-md-3 mb-3" aria-label="Right image">
+                        <figure class="mb-0">
+                            {% if entry.right_image_src %}
+                                <img class="dedupe-image" src="{{ entry.right_image_src }}" alt="Right image: {{ entry.right_path.name }}">
+                            {% else %}
+                                <div class="unavailable">Thumbnail unavailable</div>
+                            {% endif %}
+                            <figcaption class="path mt-2">{{ entry.right_path.name }}</figcaption>
+                        </figure>
+                    </section>
+                    <section class="col-md-6">
+                        <p class="action">{{ entry.action }}</p>
+                        <p><strong>Decision:</strong> {{ "Automatic CLIP match" if entry.decision_source == "clip" else "LLM adjudicated" }}</p>
+                        <p><strong>Similarity:</strong> {{ "%.2f" | format(entry.score * 100) }}%</p>
+                        {% if entry.judgement_text %}
+                            <p class="reason"><strong>LLM reasoning:</strong><br>{{ entry.judgement_text }}</p>
+                        {% endif %}
+                    </section>
+                </article>
+            {% endfor %}
+        {% else %}
+            <p class="alert alert-info" role="status">No duplicate images were selected for removal.</p>
+        {% endif %}
+    </main>
+</body>
+</html>

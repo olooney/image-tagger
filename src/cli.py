@@ -64,6 +64,7 @@ def tag_uploads(args: argparse.Namespace) -> None:
         provider=args.provider,
         instructions_filename=args.instructions_filename,
         categories=args.stackmap_config.categories,
+        category_descriptions=args.stackmap_config.category_descriptions,
     )
 
 
@@ -77,6 +78,8 @@ def dedupe_uploads(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         provider=args.provider,
     )
+    if args.preview:
+        preview(args.directory / it.DEDUPE_REVIEW_FILENAME)
 
 
 def rename_uploads(args: argparse.Namespace) -> None:
@@ -165,6 +168,7 @@ def clean_uploads(args: argparse.Namespace) -> None:
         args.metadata_filename,
         args.metadata_filename.with_suffix(f"{args.metadata_filename.suffix}.bak"),
         args.output_filename,
+        args.directory / it.DEDUPE_REVIEW_FILENAME,
     ]:
         if filename.exists():
             if args.dry_run:
@@ -235,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     dedupe_parser.add_argument(
         "--llm-threshold",
         type=float,
-        default=0.9,
+        default=0.85,
         help="CLIP score sent to the LLM for duplicate confirmation.",
     )
     dedupe_parser.add_argument(
@@ -243,6 +247,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["openai", "gemma", "qwen"],
         default="openai",
         help="Vision model provider for borderline duplicate confirmation.",
+    )
+    dedupe_parser.add_argument(
+        "--preview", action=argparse.BooleanOptionalAction, default=True
     )
     dedupe_parser.set_defaults(func=dedupe_uploads)
 
@@ -304,8 +311,8 @@ def build_parser() -> argparse.ArgumentParser:
     wall_parser.add_argument(
         "--order",
         choices=["name", "date", "random"],
-        default="name",
-        help="Order wall images by name, newest date first, or random shuffle.",
+        default="random",
+        help="Order wall images by name, newest date first, or a random shuffle (default).",
     )
     wall_parser.add_argument(
         "--seed",

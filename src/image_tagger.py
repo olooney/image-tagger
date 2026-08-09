@@ -11,13 +11,13 @@ import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, redirect_stderr
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 from importlib import resources
 from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlsplit
 
 import jinja2
@@ -56,11 +56,24 @@ def image_tag_response_model(categories: list[str]) -> type[BaseModel]:
     """Build the tagging schema for the configured shelf aliases."""
     if not categories:
         raise ValueError("stack map must define at least one non-default shelf for tagging.")
-    category_type = Literal.__getitem__(tuple(categories))
+    category_type = cast(Any, Literal)[tuple(categories)]
     return create_model(
         "ConfiguredImageTagData",
         __base__=ImageTagData,
         category=(category_type, ...),
+    )
+
+
+def _format_categories(
+    categories: list[str],
+    descriptions: Mapping[str, str],
+) -> str:
+    """Format configured category identifiers and optional guidance."""
+    return ", ".join(
+        f'"{category}": {descriptions[category]}'
+        if category in descriptions
+        else f'"{category}"'
+        for category in categories
     )
 
 
@@ -89,6 +102,23 @@ class ImageDuplicateMatch:
     right_path: Path
     decision_source: str
     judgement_text: str | None = None
+    presented_left_path: Path | None = None
+    presented_right_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class DedupeReviewEntry:
+    """Describe one duplicate decision in the static review report."""
+
+    left_path: Path
+    right_path: Path
+    left_image_src: str | None
+    right_image_src: str | None
+    score: float
+    decision_source: str
+    judgement_text: str | None
+    action: str
+    duplicate_side: Literal["left", "right"]
 
 
 class ImageComparisonMethod(Protocol):
@@ -149,6 +179,7 @@ csv_columns: list[str] = [
     "tags",
     "description",
 ]
+DEDUPE_REVIEW_FILENAME: Path = Path("dedupe_review.html")
 
 
 class VisionModelProvider(Enum):
@@ -166,9 +197,9 @@ QWEN_MODEL: str = "qwen3.5:4b"
 
 @dataclass(frozen=True)
 class VisionTaskResult:
-    """Raw vision model response data."""
+    """Validated structured vision model response data."""
 
-    content: str
+    data: BaseModel
     model: str
     total_tokens: int
 
@@ -241,12 +272,12 @@ class OpenAIVisionModelClientAdapter(VisionModelClientAdapter):
                 },
             ],
         )
-        json_string = response.choices[0].message.content
-        if json_string is None:
-            raise ValueError("OpenAI response did not include message content.")
+        data = response.choices[0].message.parsed
+        if data is None:
+            raise ValueError("OpenAI response did not match the requested response model.")
         total_tokens = response.usage.total_tokens if response.usage is not None else 0
         return VisionTaskResult(
-            content=json_string,
+            data=data,
             model=response.model,
             total_tokens=total_tokens,
         )
@@ -295,8 +326,11 @@ class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
             },
         )
         message = response.get("message", {})
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise ValueError("Ollama response did not include JSON content.")
         return VisionTaskResult(
-            content=message.get("content", ""),
+            data=response_format.model_validate_json(content),
             model=response.get("model", self.model),
             total_tokens=response.get("prompt_eval_count", 0)
             + response.get("eval_count", 0),
@@ -571,7 +605,7 @@ def judge_same_image_match(
             prompt,
             SameImageJudgement,
         )
-        return SameImageJudgement(**json.loads(response.content))
+        return SameImageJudgement.model_validate(response.data.model_dump())
     finally:
         if owned_adapter:
             client_adapter.cleanup()
@@ -587,6 +621,7 @@ def dedupe_image_matches(
     batch_size: int = 32,
     comparison_method: ImageComparisonMethod | None = None,
     client_adapter: VisionModelClientAdapter | None = None,
+    rejected_llm_matches: list[ImageDuplicateMatch] | None = None,
     verbose: int = 1,
 ) -> list[ImageDuplicateMatch]:
     """Return accepted duplicate matches from image similarity scores."""
@@ -605,6 +640,7 @@ def dedupe_image_matches(
     )
 
     matches: list[ImageDuplicateMatch] = []
+    planned_removals: set[Path] = set()
     borderline_similarities: list[ImageSimilarity] = []
     for similarity in similarities:
         if similarity.score >= automatic_threshold:
@@ -612,6 +648,8 @@ def dedupe_image_matches(
                 similarity.left_path,
                 similarity.right_path,
             )
+            if {kept_path, duplicate_path} & planned_removals:
+                continue
             matches.append(
                 ImageDuplicateMatch(
                     score=similarity.score,
@@ -620,10 +658,13 @@ def dedupe_image_matches(
                     decision_source="clip",
                 )
             )
+            planned_removals.add(duplicate_path)
         elif similarity.score >= llm_threshold:
             borderline_similarities.append(similarity)
 
     for similarity in borderline_similarities:
+        if {similarity.left_path, similarity.right_path} & planned_removals:
+            continue
         if verbose >= 2:
             print(
                 f"LLM duplicate candidate {similarity.score * 100:0.2f}%:\n"
@@ -641,6 +682,18 @@ def dedupe_image_matches(
             if judgement.thinking:
                 print(f"  reason: {judgement.thinking}")
         if judgement.keep == "both":
+            if rejected_llm_matches is not None:
+                rejected_llm_matches.append(
+                    ImageDuplicateMatch(
+                        score=similarity.score,
+                        left_path=similarity.left_path,
+                        right_path=similarity.right_path,
+                        decision_source="llm",
+                        judgement_text=judgement.thinking,
+                        presented_left_path=similarity.left_path,
+                        presented_right_path=similarity.right_path,
+                    )
+                )
             continue
         kept_path = similarity.left_path if judgement.keep == "left" else similarity.right_path
         duplicate_path = similarity.right_path if judgement.keep == "left" else similarity.left_path
@@ -652,8 +705,11 @@ def dedupe_image_matches(
                     right_path=duplicate_path,
                     decision_source="llm",
                     judgement_text=judgement.thinking,
+                    presented_left_path=similarity.left_path,
+                    presented_right_path=similarity.right_path,
                 )
             )
+            planned_removals.add(duplicate_path)
 
     return sorted(matches, key=lambda match: match.score, reverse=True)
 
@@ -663,6 +719,7 @@ def tag_image(
     client_adapter: VisionModelClientAdapter,
     prompt_template: str = IMAGE_PROMPT_TEMPLATE,
     categories: list[str] | None = None,
+    category_descriptions: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Tag a single image with a vision model."""
     # handle local or remote images
@@ -683,7 +740,7 @@ def tag_image(
     # run the tagging vision task and record the time it took
     prompt = prompt_template.format(
         filename=filename,
-        categories=", ".join(f'"{category}"' for category in categories or []),
+        categories=_format_categories(categories or [], category_descriptions or {}),
     )
     vision_start_time = time.perf_counter()
     response_format = (
@@ -691,13 +748,13 @@ def tag_image(
     )
     response = client_adapter.vision_task(base64_image_data, prompt, response_format)
     vision_duration = time.perf_counter() - vision_start_time
-    data = json.loads(response.content)
-
-    # validate the response
-    response_format(**data)
+    data = response.data.model_dump()
 
     # clean up the suggested filename and fix the extension if necessary
-    suggested_filename = clean_filename(data.get("filename", None))
+    suggested_filename_value = data["filename"]
+    if not isinstance(suggested_filename_value, str):
+        raise ValueError("Vision response filename must be a string.")
+    suggested_filename = clean_filename(suggested_filename_value)
     suggested_filename_fixed = fix_extension(filename, suggested_filename)
 
     # format the results
@@ -722,6 +779,7 @@ def tag_images(
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
     instructions_filename: Pathish | None = None,
     categories: list[str] | None = None,
+    category_descriptions: Mapping[str, str] | None = None,
 ) -> None:
     """Tag images and write metadata rows."""
     output_path = Path(output_filename)
@@ -754,6 +812,7 @@ def tag_images(
                         client_adapter,
                         prompt_template,
                         categories,
+                        category_descriptions,
                     )
                     duration = row.pop("vision_duration")
                     vision_durations.append(duration)
@@ -895,6 +954,7 @@ def dedupe_images(
     image_paths = sorted(find_images(directory_path))
     if verbose == 1:
         print(f"working in {quote_display_path(directory_path)}")
+    rejected_llm_matches: list[ImageDuplicateMatch] = []
     matches = dedupe_image_matches(
         image_paths,
         automatic_threshold=automatic_threshold,
@@ -902,14 +962,27 @@ def dedupe_images(
         provider=provider,
         batch_size=batch_size,
         verbose=verbose,
+        rejected_llm_matches=rejected_llm_matches,
     )
 
     removed_paths: set[Path] = set()
+    review_entries = [
+        _dedupe_review_entry(
+            match,
+            action="Both images were kept after LLM adjudication.",
+        )
+        for match in rejected_llm_matches
+    ]
     for match in matches:
         duplicate = match.right_path
         kept = match.left_path
         if duplicate in removed_paths or kept in removed_paths:
             continue
+        review_entry = _dedupe_review_entry(match, action="")
+        action = _duplicate_removal_action(
+            review_entry.duplicate_side,
+            dry_run=dry_run,
+        )
         if verbose >= 1:
             print(
                 display_file_operation(
@@ -931,13 +1004,90 @@ def dedupe_images(
             if verbose >= 1:
                 print("success!")
         except Exception:
+            action = _duplicate_removal_action(
+                review_entry.duplicate_side,
+                dry_run=False,
+                removed=False,
+            )
             if verbose >= 1:
                 print("error!")
             else:
                 print(f"error removing {os.fspath(duplicate)!r}!")
             traceback.print_exc()
+        review_entries.append(replace(review_entry, action=action))
+
+    review_filename = directory_path / DEDUPE_REVIEW_FILENAME
+    generate_dedupe_review(review_entries, review_filename)
+    if verbose >= 1:
+        print(f"wrote {quote_display_path(review_filename)}")
 
     return matches
+
+
+def _dedupe_review_entry(
+    match: ImageDuplicateMatch,
+    *,
+    action: str,
+) -> DedupeReviewEntry:
+    """Capture report thumbnails before a duplicate can be removed."""
+    left_path = match.presented_left_path or match.left_path
+    right_path = match.presented_right_path or match.right_path
+    duplicate_side: Literal["left", "right"] = (
+        "left" if match.right_path == left_path else "right"
+    )
+    return DedupeReviewEntry(
+        left_path=left_path,
+        right_path=right_path,
+        left_image_src=_thumbnail_data_url(left_path),
+        right_image_src=_thumbnail_data_url(right_path),
+        score=match.score,
+        decision_source=match.decision_source,
+        judgement_text=match.judgement_text,
+        action=action,
+        duplicate_side=duplicate_side,
+    )
+
+
+def _duplicate_removal_action(
+    duplicate_side: Literal["left", "right"],
+    *,
+    dry_run: bool,
+    removed: bool = True,
+) -> str:
+    """Describe the review side selected for duplicate removal."""
+    side = duplicate_side.capitalize()
+    if not removed:
+        return f"{side} image could not be removed as a duplicate."
+    if dry_run:
+        return f"{side} image would be removed as a duplicate."
+    return f"{side} image was removed as a duplicate."
+
+
+def _thumbnail_data_url(image_path: Pathish) -> str | None:
+    """Encode an image as a PNG data URL within a 500-by-750-pixel bound."""
+    try:
+        with Image.open(image_path) as image:
+            thumbnail = image.convert("RGB")
+            thumbnail.thumbnail((500, 750), Image.Resampling.LANCZOS)
+            return f"data:image/png;base64,{base64_encode_image(thumbnail)}"
+    except (OSError, ValueError):
+        return None
+
+
+def generate_dedupe_review(
+    entries: Sequence[DedupeReviewEntry],
+    output_filename: Pathish,
+) -> Path:
+    """Render a static HTML report for duplicate-removal decisions."""
+    template_text = (
+        resources.files("image_tagger_data")
+        .joinpath("dedupe_review.html")
+        .read_text(encoding="utf-8")
+    )
+    template = jinja2.Environment(autoescape=True).from_string(template_text)
+    output_path = Path(output_filename)
+    output_path.write_text(template.render(entries=entries), encoding="utf-8")
+    return output_path
 
 
 def scramble_image_directory(
@@ -1066,7 +1216,7 @@ def generate_wall(
     directory: Pathish,
     output_filename: Pathish | None = None,
     metadata_filename: Pathish | None = None,
-    order: str = "name",
+    order: str = "random",
     seed: int | None = None,
     title: str | None = None,
     verbose: int = 1,

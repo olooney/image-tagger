@@ -55,9 +55,12 @@ paths may be absolute or relative to the `.stackmap` file itself:
 
 ```yaml
 default: shelves/inbox
-art: shelves/art
+art: shelves/art # paintings, drawings, and other visual art
 books: shelves/books
 ```
+
+An inline comment after a shelf path is passed to the tagging prompt as guidance
+for that category; it does not change the shelf identifier or path.
 
 If `DIRECTORY` is omitted, tools use the `default` shelf. The `default` shelf
 is an inbox and never a tagging category; every other shelf name is the

@@ -55,7 +55,10 @@ def preview(html_path: Pathish) -> None:
             check=True,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
-        webbrowser.open(html_uri)
+        try:
+            webbrowser.open(html_uri)
+        except (OSError, webbrowser.Error):
+            return
 
 
 def quote_display_path(path: Pathish) -> str:

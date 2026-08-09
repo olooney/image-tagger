@@ -1,3 +1,4 @@
+import base64
 import csv
 import json
 import os
@@ -6,7 +7,7 @@ import shutil
 import sys
 from collections.abc import Callable
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pytest
@@ -115,7 +116,11 @@ class MockVisionModelClientAdapter(it.VisionModelClientAdapter):
                 "filename": clean_filename,
             }
         )
-        return it.VisionTaskResult(content=content, model=self.model, total_tokens=0)
+        return it.VisionTaskResult(
+            data=response_format.model_validate_json(content),
+            model=self.model,
+            total_tokens=0,
+        )
 
     def cleanup(self) -> None:
         """No-op cleanup for tests."""
@@ -149,7 +154,11 @@ class MockSameImageClientAdapter(it.VisionModelClientAdapter):
                 "keep": self.keep,
             }
         )
-        return it.VisionTaskResult(content=content, model=self.model, total_tokens=0)
+        return it.VisionTaskResult(
+            data=response_format.model_validate_json(content),
+            model=self.model,
+            total_tokens=0,
+        )
 
     def cleanup(self) -> None:
         """No-op cleanup for tests."""
@@ -193,6 +202,12 @@ class FakeImageComparisonMethod:
             for left_path, right_path in pairs
             if (score := self.scores.get((left_path.name, right_path.name))) is not None
         ]
+
+
+@pytest.fixture(autouse=True)
+def disable_browser_preview(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent CLI workflow tests from opening browser windows."""
+    monkeypatch.setattr(cli, "preview", lambda _: None)
 
 
 @pytest.fixture
@@ -271,7 +286,7 @@ def test_stackmap_resolves_relative_shelves_and_discovers_parent(
     nested_directory.mkdir(parents=True)
     stackmap_filename = workspace / ".stackmap"
     stackmap_filename.write_text(
-        "default: shelves/inbox\nart: shelves/art\n",
+        "default: shelves/inbox\nart: shelves/art # paintings and drawings\n",
         encoding="utf-8",
     )
 
@@ -279,6 +294,7 @@ def test_stackmap_resolves_relative_shelves_and_discovers_parent(
 
     assert stackmap.default_directory == workspace / "shelves" / "inbox"
     assert stackmap.categories == ["art"]
+    assert stackmap.category_descriptions == {"art": "paintings and drawings"}
     assert stackmap.directory_for("art") == workspace / "shelves" / "art"
     assert find_stackmap(nested_directory) == stackmap_filename
 
@@ -288,6 +304,25 @@ def test_image_tag_response_schema_allows_only_configured_categories() -> None:
     schema = it.image_tag_response_model(["art", "books"]).model_json_schema()
 
     assert schema["properties"]["category"]["enum"] == ["art", "books"]
+
+
+def test_tag_prompt_includes_category_descriptions(
+    workflow_workspace: dict[str, Path],
+) -> None:
+    """Include StackMap category guidance in the model prompt."""
+    PROMPTS.clear()
+    image_path = workflow_workspace["uploads"] / "ai.jpg"
+    Image.new("RGB", (4, 4)).save(image_path)
+
+    it.tag_image(
+        image_path,
+        MockVisionModelClientAdapter(),
+        categories=["ai", "art"],
+        category_descriptions={"ai": "artificial intelligence and machine learning"},
+    )
+
+    assert '"ai": artificial intelligence and machine learning' in PROMPTS[-1]
+    assert '"art"' in PROMPTS[-1]
 
 
 def test_cli_directory_alias_uses_stackmap_before_local_path(
@@ -453,13 +488,17 @@ def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     assert (workflow_workspace["root"] / "vintage" / "antique_camera.tiff").exists()
     assert not (uploads_dir / "picasso.png").exists()
 
+    dedupe_review_filename = uploads_dir / it.DEDUPE_REVIEW_FILENAME
+    dedupe_review_filename.write_text("review", encoding="utf-8")
     clean_stdout = run_cli("clean", str(uploads_dir))
     assert f"Removed {metadata_filename}" in clean_stdout
     assert f"Removed {metadata_backup_filename}" in clean_stdout
     assert f"Removed {gallery_filename}" in clean_stdout
+    assert f"Removed {dedupe_review_filename}" in clean_stdout
     assert not metadata_filename.exists()
     assert not metadata_backup_filename.exists()
     assert not gallery_filename.exists()
+    assert not dedupe_review_filename.exists()
 
 
 def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
@@ -826,8 +865,7 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert 'src="square.jpg"' in html
     assert 'src="nested/wide.png"' in html
     assert 'src="wider.jpg"' in html
-    assert html.index('src="square.jpg"') < html.index('src="nested/wide.png"')
-    assert html.index('src="nested/wide.png"') < html.index('src="wider.jpg"')
+    assert set(wall_image_srcs(html)) == {"square.jpg", "nested/wide.png", "wider.jpg"}
     assert 'title="square.jpg (100x100)' in html
     assert 'Category: books' in html
     assert 'Tags: library, reference' in html
@@ -913,7 +951,7 @@ def test_wall_cli_random_order_defaults_to_seed_37(
     for filename in ["alpha.jpg", "bravo.jpg", "charlie.jpg", "delta.jpg"]:
         Image.new("RGB", (100, 100)).save(uploads_dir / filename)
 
-    run_cli("wall", str(uploads_dir), "--order", "random", "--no-preview")
+    run_cli("wall", str(uploads_dir), "--no-preview")
     default_seed_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
     run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "37", "--no-preview")
     explicit_seed_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
@@ -1448,6 +1486,37 @@ def test_dedupe_image_matches_breaks_automatic_size_ties_by_filename(
     ]
 
 
+def test_dedupe_image_matches_skips_llm_for_planned_removal(
+    tmp_path: Path,
+) -> None:
+    """Avoid LLM adjudication for pairs containing a selected duplicate."""
+    kept_path = tmp_path / "a-kept.jpg"
+    duplicate_path = tmp_path / "b-duplicate.jpg"
+    other_path = tmp_path / "c-other.jpg"
+    Image.new("RGB", (10, 10)).save(kept_path)
+    Image.new("RGB", (4, 4)).save(duplicate_path)
+    Image.new("RGB", (4, 4)).save(other_path)
+    comparison_method = FakeImageComparisonMethod(
+        {
+            (kept_path.name, duplicate_path.name): 1.0,
+            (duplicate_path.name, other_path.name): 0.95,
+        }
+    )
+    client_adapter = MockSameImageClientAdapter("left")
+
+    matches = it.dedupe_image_matches(
+        [kept_path, duplicate_path, other_path],
+        comparison_method=comparison_method,
+        client_adapter=client_adapter,
+        verbose=0,
+    )
+
+    assert [(match.left_path, match.right_path) for match in matches] == [
+        (kept_path, duplicate_path)
+    ]
+    assert client_adapter.calls == []
+
+
 @pytest.mark.parametrize("provider", list(it.VisionModelProvider))
 @pytest.mark.parametrize("keep", ["left", "right", "both"])
 def test_dedupe_image_matches_uses_llm_for_borderline_candidates(
@@ -1488,6 +1557,18 @@ def test_dedupe_image_matches_uses_llm_for_borderline_candidates(
             expected_kept,
             expected_duplicate,
         )
+        assert (matches[0].presented_left_path, matches[0].presented_right_path) == (
+            left_path,
+            right_path,
+        )
+        review_entry = it._dedupe_review_entry(matches[0], action="")
+        assert (review_entry.left_path, review_entry.right_path) == (
+            left_path,
+            right_path,
+        )
+        assert review_entry.duplicate_side == (
+            "right" if keep == "left" else "left"
+        )
 
 
 def test_dedupe_image_matches_prints_verbose_llm_judgement_details(
@@ -1503,6 +1584,7 @@ def test_dedupe_image_matches_prints_verbose_llm_judgement_details(
         {(left_path.name, right_path.name): 0.95}
     )
     client_adapter = MockSameImageClientAdapter("both")
+    rejected_llm_matches: list[it.ImageDuplicateMatch] = []
 
     matches = it.dedupe_image_matches(
         [left_path, right_path],
@@ -1510,11 +1592,23 @@ def test_dedupe_image_matches_prints_verbose_llm_judgement_details(
         llm_threshold=0.9,
         comparison_method=comparison_method,
         client_adapter=client_adapter,
+        rejected_llm_matches=rejected_llm_matches,
         verbose=2,
     )
 
     output = capsys.readouterr().out
     assert matches == []
+    assert rejected_llm_matches == [
+        it.ImageDuplicateMatch(
+            score=0.95,
+            left_path=left_path,
+            right_path=right_path,
+            decision_source="llm",
+            judgement_text="keep both",
+            presented_left_path=left_path,
+            presented_right_path=right_path,
+        )
+    ]
     assert "LLM duplicate candidate 95.00%:" in output
     assert f"left: {quote_display_path(left_path)} (4x5)" in output
     assert f"right: {quote_display_path(right_path)} (6x7)" in output
@@ -1534,8 +1628,8 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
     uploads_dir.mkdir()
     kept = uploads_dir / "kept.jpg"
     duplicate = uploads_dir / "duplicate.jpg"
-    kept.touch()
-    duplicate.touch()
+    Image.new("RGB", (600, 300), "white").save(kept)
+    Image.new("RGB", (300, 1200), "black").save(duplicate)
 
     monkeypatch.setattr(
         it,
@@ -1557,6 +1651,8 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
         path.unlink()
 
     monkeypatch.setattr(it, "send2trash", fake_send2trash)
+    previewed_paths: list[Path] = []
+    monkeypatch.setattr(cli, "preview", previewed_paths.append)
     dry_run_args = ("--dry-run",) if dry_run else ()
 
     output = run_cli("dedupe", str(uploads_dir), *dry_run_args)
@@ -1566,6 +1662,23 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
     assert duplicate.exists() is dry_run
     assert recycled_paths == ([] if dry_run else [duplicate])
     assert kept.exists()
+    review_filename = uploads_dir / it.DEDUPE_REVIEW_FILENAME
+    review_html = review_filename.read_text(encoding="utf-8")
+    expected_action = (
+        "Right image would be removed as a duplicate."
+        if dry_run
+        else "Right image was removed as a duplicate."
+    )
+    assert "data:image/png;base64," in review_html
+    assert "Automatic CLIP match" in review_html
+    assert expected_action in review_html
+    assert previewed_paths == [review_filename]
+    encoded_thumbnails = re.findall(r'data:image/png;base64,([^"\']+)', review_html)
+    thumbnail_sizes = [
+        Image.open(BytesIO(base64.b64decode(encoded_thumbnail))).size
+        for encoded_thumbnail in encoded_thumbnails
+    ]
+    assert thumbnail_sizes == [(500, 250), (188, 750)]
 
 
 def test_dedupe_permanently_deletes_when_recycle_bin_is_unavailable(
