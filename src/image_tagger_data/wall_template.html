@@ -27,11 +27,6 @@
             z-index: 20;
             display: none;
             width: min(22rem, calc(100vw - 1.5rem));
-            padding: 0.5rem;
-            border: 1px solid rgb(255 255 255 / 22%);
-            border-radius: 0.25rem;
-            background: rgb(0 0 0 / 78%);
-            box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 35%);
         }
         .search-panel.is-open { display: block; }
         .search-panel input {
@@ -121,14 +116,63 @@
         const lightbox = document.querySelector('.lightbox');
         const lightboxImage = lightbox.querySelector('img');
         const tiles = Array.from(document.querySelectorAll('.tile'));
+        let activeTileIndex = -1;
+
+        const ASCII_EQUIVALENTS = {
+            'ß': 'ss',
+            'æ': 'ae',
+            'œ': 'oe',
+            'ð': 'd',
+            'þ': 'th',
+            'ø': 'o',
+            'ł': 'l',
+            'đ': 'd',
+            'ħ': 'h',
+            'ı': 'i',
+            'ŋ': 'n',
+            '—': '-',
+            '–': '-',
+            '―': '-',
+            '‐': '-',
+            '‑': '-',
+            '‒': '-',
+            '“': '"',
+            '”': '"',
+            '„': '"',
+            '«': '"',
+            '»': '"',
+            '‘': "'",
+            '’': "'",
+            '‚': "'",
+            '‹': "'",
+            '›': "'",
+            '…': '...',
+            '·': '.',
+            '•': '*',
+            '©': '(c)',
+            '®': '(r)',
+            '™': 'tm',
+        };
+
+        const normalizeSearchText = (value) => value
+            .toLowerCase()
+            .replace(/[ßæœðþøłđħıŋ—–―‐‑‒“”„«»‘’‚‹›…·•©®™]/g, (character) => ASCII_EQUIVALENTS[character])
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '');
 
         const filterTiles = () => {
-            const query = searchInput.value;
+            const terms = normalizeSearchText(searchInput.value)
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean);
 
             tiles.forEach((tile) => {
                 const image = tile.querySelector('img');
-                const searchText = `${image.alt}\n${image.title}`;
-                tile.classList.toggle('is-hidden', query !== '' && !searchText.includes(query));
+                const searchText = normalizeSearchText(`${image.alt}\n${image.title}`);
+                tile.classList.toggle(
+                    'is-hidden',
+                    terms.length > 0 && !terms.every((term) => searchText.includes(term)),
+                );
             });
         };
 
@@ -138,39 +182,79 @@
             searchInput.select();
         };
 
+        const closeSearch = () => {
+            searchInput.value = '';
+            filterTiles();
+            searchPanel.classList.remove('is-open');
+            searchInput.blur();
+        };
+
+        const openLightbox = (tileIndex) => {
+            const image = tiles[tileIndex].querySelector('img');
+            activeTileIndex = tileIndex;
+            lightboxImage.src = image.currentSrc || image.src;
+            lightboxImage.alt = image.alt;
+            lightbox.classList.add('is-open');
+        };
+
+        const closeLightbox = () => {
+            lightbox.classList.remove('is-open');
+            lightboxImage.removeAttribute('src');
+            activeTileIndex = -1;
+        };
+
+        const moveLightbox = (direction) => {
+            const visibleTileIndexes = tiles
+                .map((tile, index) => ({ tile, index }))
+                .filter(({ tile }) => !tile.classList.contains('is-hidden'))
+                .map(({ index }) => index);
+            const currentIndex = visibleTileIndexes.indexOf(activeTileIndex);
+            const nextIndex = (currentIndex + direction + visibleTileIndexes.length) % visibleTileIndexes.length;
+
+            if (visibleTileIndexes.length > 0) {
+                openLightbox(visibleTileIndexes[nextIndex]);
+            }
+        };
+
         searchPanel.addEventListener('submit', (event) => {
             event.preventDefault();
         });
 
         searchInput.addEventListener('input', filterTiles);
 
-        searchInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') {
-                searchInput.value = '';
-                filterTiles();
-                searchPanel.classList.remove('is-open');
-                searchInput.blur();
-            }
-        });
-
         document.addEventListener('keydown', (event) => {
+            if (lightbox.classList.contains('is-open')) {
+                if (event.key === 'Escape') {
+                    closeLightbox();
+                    return;
+                }
+                if (event.key === 'ArrowLeft') {
+                    moveLightbox(-1);
+                    return;
+                }
+                if (event.key === 'ArrowRight') {
+                    moveLightbox(1);
+                    return;
+                }
+            }
+            if (event.key === 'Escape') {
+                closeSearch();
+                return;
+            }
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
                 event.preventDefault();
                 openSearch();
             }
         });
 
-        document.querySelectorAll('.tile img').forEach((image) => {
+        document.querySelectorAll('.tile img').forEach((image, index) => {
             image.addEventListener('click', () => {
-                lightboxImage.src = image.currentSrc || image.src;
-                lightboxImage.alt = image.alt;
-                lightbox.classList.add('is-open');
+                openLightbox(index);
             });
         });
 
         lightbox.addEventListener('click', () => {
-            lightbox.classList.remove('is-open');
-            lightboxImage.removeAttribute('src');
+            closeLightbox();
         });
     </script>
 </body>

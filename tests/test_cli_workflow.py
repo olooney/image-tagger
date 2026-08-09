@@ -745,11 +745,16 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert 'title="wider.jpg"' in html
     assert str(uploads_dir) not in html
     assert 'class="search-panel"' in html
-    assert "searchText.includes(query)" in html
+    assert "const ASCII_EQUIVALENTS" in html
+    assert ".normalize('NFKD')" in html
+    assert "terms.every((term) => searchText.includes(term))" in html
+    assert "const closeSearch" in html
     assert "event.key.toLowerCase() === 'f'" in html
     assert "event.ctrlKey || event.metaKey" in html
     assert "lightbox.classList.add('is-open')" in html
     assert "lightbox.classList.remove('is-open')" in html
+    assert "event.key === 'ArrowLeft'" in html
+    assert "event.key === 'ArrowRight'" in html
 
 
 def test_wall_cli_title_can_be_overridden(

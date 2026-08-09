@@ -1082,7 +1082,9 @@ def generate_wall(
     ]
 
     template_text = (
-        resources.files("image_tagger_data").joinpath("wall_template.html").read_text()
+        resources.files("image_tagger_data")
+        .joinpath("wall_template.html")
+        .read_text(encoding="utf-8")
     )
     template = jinja2.Environment(autoescape=True).from_string(template_text)
     output = template.render(
