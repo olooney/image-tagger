@@ -1142,6 +1142,7 @@ WALL_LAYOUT_MAX_PASSES: int = 3
 
 def infer_wall_layout(
     aspect_ratios: Mapping[Path, float],
+    double_wide_threshold: float = WALL_DOUBLE_WIDE_THRESHOLD,
 ) -> tuple[float, set[Path]]:
     """Infer a one-cell aspect ratio and double-wide wall tiles."""
     cell_aspect_ratio = median_aspect_ratio(aspect_ratios.values())
@@ -1150,7 +1151,7 @@ def infer_wall_layout(
         double_wide_paths = {
             filepath
             for filepath, aspect_ratio in aspect_ratios.items()
-            if aspect_ratio > WALL_DOUBLE_WIDE_THRESHOLD * cell_aspect_ratio
+            if aspect_ratio > double_wide_threshold * cell_aspect_ratio
         }
         adjusted_aspect_ratios = [
             aspect_ratio / 2 if filepath in double_wide_paths else aspect_ratio
@@ -1164,7 +1165,7 @@ def infer_wall_layout(
     double_wide_paths = {
         filepath
         for filepath, aspect_ratio in aspect_ratios.items()
-        if aspect_ratio > WALL_DOUBLE_WIDE_THRESHOLD * cell_aspect_ratio
+        if aspect_ratio > double_wide_threshold * cell_aspect_ratio
     }
     return cell_aspect_ratio, double_wide_paths
 
@@ -1252,6 +1253,7 @@ def generate_wall(
     order: str = "random",
     seed: int | None = None,
     title: str | None = None,
+    double_wide_threshold: float = WALL_DOUBLE_WIDE_THRESHOLD,
     verbose: int = 1,
 ) -> Path:
     """Generate a static image wall HTML file."""
@@ -1277,7 +1279,10 @@ def generate_wall(
     else:
         raise ValueError(f"Unsupported wall order: {order}")
     aspect_ratios = image_aspect_ratios(filepaths)
-    aspect_ratio, double_wide_paths = infer_wall_layout(aspect_ratios)
+    aspect_ratio, double_wide_paths = infer_wall_layout(
+        aspect_ratios,
+        double_wide_threshold,
+    )
     cell_width = 200
     cell_height = round(cell_width / aspect_ratio)
     metadata_titles = wall_metadata_titles(metadata_filename)

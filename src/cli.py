@@ -158,6 +158,7 @@ def wall_uploads(args: argparse.Namespace) -> None:
         order=args.order,
         seed=args.seed,
         title=args.title,
+        double_wide_threshold=args.double_wide_threshold,
         verbose=args.verbose,
     )
     if args.preview:
@@ -338,6 +339,12 @@ def build_parser() -> argparse.ArgumentParser:
     wall_parser.add_argument(
         "--title",
         help="HTML page title for the generated wall.",
+    )
+    wall_parser.add_argument(
+        "--double-wide-threshold",
+        type=float,
+        default=it.WALL_DOUBLE_WIDE_THRESHOLD,
+        help="Mark images this many times wider than a cell as double-wide.",
     )
     wall_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True

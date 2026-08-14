@@ -1091,6 +1091,28 @@ def test_wall_cli_uses_exif_orientation_and_reweighted_cell_aspect_ratio(
     assert html.count('class="tile double-wide"') == 1
 
 
+def test_wall_cli_allows_configuring_double_wide_threshold(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Use the requested threshold when assigning double-wide wall tiles."""
+    uploads_dir = tmp_path / "threshold"
+    uploads_dir.mkdir()
+    Image.new("RGB", (100, 100)).save(uploads_dir / "square.jpg")
+    Image.new("RGB", (200, 100)).save(uploads_dir / "wide.jpg")
+
+    run_cli(
+        "wall",
+        str(uploads_dir),
+        "--double-wide-threshold",
+        "1.2",
+        "--no-preview",
+    )
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    assert html.count('class="tile double-wide"') == 1
+
+
 def test_infer_wall_layout_reweights_double_wide_images() -> None:
     """Re-estimate the base cell ratio after assigning double-wide tiles."""
     aspect_ratios = {
