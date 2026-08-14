@@ -8,3 +8,4 @@
 - For multiline function signatures and long literals, use trailing commas and one item or argument per line.
 - Add short one-line comments before non-obvious code blocks, not at the end of code lines.
 - Do not move dev tools such as `pytest`, `pre-commit`, or `ty` out of runtime dependencies unless explicitly requested.
+- Always use `uv` for Python dependency and environment operations so `uv.lock` stays in sync with `pyproject.toml`.

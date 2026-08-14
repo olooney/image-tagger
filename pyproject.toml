@@ -19,6 +19,7 @@ dependencies = [
     "pytest>=9.0.2",
     "pydantic>=2.13.4",
     "fastapi>=0.116.0",
+    "httpx2>=0.1.0",
     "python-multipart>=0.0.20",
     "pyyaml>=6.0.3",
     "requests>=2.34.2",

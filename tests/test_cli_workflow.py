@@ -931,10 +931,11 @@ def test_review_metadata_cleans_backup_on_keyboard_interrupt(
 
     monkeypatch.setattr(uvicorn, "run", fake_run)
 
-    review_app.review_metadata(
-        metadata_filename,
-        stackmap=write_test_stackmap(tmp_path),
-    )
+    with pytest.raises(KeyboardInterrupt):
+        review_app.review_metadata(
+            metadata_filename,
+            stackmap=write_test_stackmap(tmp_path),
+        )
 
     assert not backup_filename.exists()
 
@@ -1067,6 +1068,43 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "lightbox.classList.remove('is-open')" in html
     assert "event.key === 'ArrowLeft'" in html
     assert "event.key === 'ArrowRight'" in html
+
+
+def test_wall_cli_uses_exif_orientation_and_reweighted_cell_aspect_ratio(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Render camera images using their display orientation and tile span."""
+    uploads_dir = tmp_path / "camera"
+    uploads_dir.mkdir()
+    for index in range(3):
+        portrait = Image.new("RGB", (400, 300))
+        exif = portrait.getexif()
+        exif[274] = 6
+        portrait.save(uploads_dir / f"portrait-{index}.jpg", exif=exif)
+    Image.new("RGB", (400, 300)).save(uploads_dir / "landscape.jpg")
+
+    run_cli("wall", str(uploads_dir), "--no-preview")
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    assert "--cell-height: 267px;" in html
+    assert html.count('class="tile double-wide"') == 1
+
+
+def test_infer_wall_layout_reweights_double_wide_images() -> None:
+    """Re-estimate the base cell ratio after assigning double-wide tiles."""
+    aspect_ratios = {
+        Path("narrow.jpg"): 0.9,
+        Path("square.jpg"): 1.0,
+        Path("base.jpg"): 1.2,
+        Path("wide.jpg"): 2.1,
+        Path("wider.jpg"): 2.2,
+    }
+
+    cell_aspect_ratio, double_wide_paths = it.infer_wall_layout(aspect_ratios)
+
+    assert cell_aspect_ratio == pytest.approx(1.05)
+    assert double_wide_paths == {Path("wide.jpg"), Path("wider.jpg")}
 
 
 def test_wall_cli_title_can_be_overridden(
@@ -1955,6 +1993,6 @@ def test_dedupe_help_shows_default_values(
     assert "--automatic-threshold AUTOMATIC_THRESHOLD" in output
     assert "(default: 0.99)" in output
     assert "--llm-threshold LLM_THRESHOLD" in output
-    assert "(default: 0.9)" in output
+    assert "(default: 0.85)" in output
     assert "--provider {openai,gemma,qwen}" in output
     assert "(default: openai)" in output

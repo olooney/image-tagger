@@ -24,7 +24,7 @@ import jinja2
 import numpy as np
 import pandas as pd
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 from pydantic import BaseModel, create_model
 from send2trash import send2trash
 from send2trash.exceptions import TrashPermissionError
@@ -1124,16 +1124,49 @@ def median_aspect_ratio(aspect_ratios: Iterable[float]) -> float:
 
 
 def image_aspect_ratios(filepaths: Iterable[Pathish]) -> dict[Path, float]:
-    """Return width-to-height ratios keyed by image path."""
+    """Return display width-to-height ratios keyed by image path."""
     aspect_ratios: dict[Path, float] = {}
     for filepath in filepaths:
         image_path = Path(filepath)
         with Image.open(image_path) as image:
-            width, height = image.size
+            width, height = ImageOps.exif_transpose(image).size
         if height > 0:
             aspect_ratios[image_path] = width / height
 
     return aspect_ratios
+
+
+WALL_DOUBLE_WIDE_THRESHOLD: float = 1.7
+WALL_LAYOUT_MAX_PASSES: int = 3
+
+
+def infer_wall_layout(
+    aspect_ratios: Mapping[Path, float],
+) -> tuple[float, set[Path]]:
+    """Infer a one-cell aspect ratio and double-wide wall tiles."""
+    cell_aspect_ratio = median_aspect_ratio(aspect_ratios.values())
+
+    for _ in range(WALL_LAYOUT_MAX_PASSES):
+        double_wide_paths = {
+            filepath
+            for filepath, aspect_ratio in aspect_ratios.items()
+            if aspect_ratio > WALL_DOUBLE_WIDE_THRESHOLD * cell_aspect_ratio
+        }
+        adjusted_aspect_ratios = [
+            aspect_ratio / 2 if filepath in double_wide_paths else aspect_ratio
+            for filepath, aspect_ratio in aspect_ratios.items()
+        ]
+        next_cell_aspect_ratio = median_aspect_ratio(adjusted_aspect_ratios)
+        if next_cell_aspect_ratio == cell_aspect_ratio:
+            break
+        cell_aspect_ratio = next_cell_aspect_ratio
+
+    double_wide_paths = {
+        filepath
+        for filepath, aspect_ratio in aspect_ratios.items()
+        if aspect_ratio > WALL_DOUBLE_WIDE_THRESHOLD * cell_aspect_ratio
+    }
+    return cell_aspect_ratio, double_wide_paths
 
 
 def paths_with_mtime(filepaths: Iterable[Pathish]) -> list[tuple[float, Path]]:
@@ -1244,7 +1277,7 @@ def generate_wall(
     else:
         raise ValueError(f"Unsupported wall order: {order}")
     aspect_ratios = image_aspect_ratios(filepaths)
-    aspect_ratio = median_aspect_ratio(aspect_ratios.values())
+    aspect_ratio, double_wide_paths = infer_wall_layout(aspect_ratios)
     cell_width = 200
     cell_height = round(cell_width / aspect_ratio)
     metadata_titles = wall_metadata_titles(metadata_filename)
@@ -1256,8 +1289,7 @@ def generate_wall(
                 os.fspath(filepath),
                 metadata_titles.get(filepath.name, filepath.name),
             ),
-            "is_double_wide": aspect_ratios.get(filepath, aspect_ratio)
-            > 1.8 * aspect_ratio,
+            "is_double_wide": filepath in double_wide_paths,
         }
         for filepath in filepaths
     ]

@@ -383,10 +383,6 @@ def review_metadata(
     webbrowser.open(url)
     try:
         uvicorn.run(app, host="127.0.0.1", port=port)
-    except KeyboardInterrupt:
-        if backup_path.exists():
-            backup_path.unlink()
-        raise
     finally:
         if backup_path.exists():
             backup_path.unlink()
