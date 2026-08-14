@@ -17,6 +17,9 @@ dedupe *args:
 rename *args:
     {{python}} src/cli.py rename {{args}}
 
+prune *args:
+    {{python}} src/cli.py prune {{args}}
+
 shelve *args:
     {{python}} src/cli.py shelve {{args}}
 

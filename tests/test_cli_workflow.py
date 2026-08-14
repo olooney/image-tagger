@@ -231,9 +231,10 @@ def workflow_workspace(tmp_path: Path) -> dict[str, Path]:
 
 
 def write_test_stackmap(directory: Path) -> StackMap:
-    """Copy the versioned relative stack map beside a test workspace."""
+    """Install the default test stack map unless a workspace-specific one already exists."""
     stackmap_filename = directory.parent / ".stackmap"
-    shutil.copy2(TEST_STACKMAP_TEMPLATE, stackmap_filename)
+    if not stackmap_filename.exists():
+        shutil.copy2(TEST_STACKMAP_TEMPLATE, stackmap_filename)
     return StackMap.load(stackmap_filename)
 
 
@@ -653,6 +654,8 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     assert "Metadata:" not in response.text
     assert "Rows:" not in response.text
     assert "Delete" in response.text
+    assert 'Original Filename' in response.text
+    assert 'readonly' in response.text
     assert "No images to review." in response.text
     assert '<p id="empty-review-message" class="alert alert-info" role="status" hidden>' in response.text
     assert '<div id="shelve-controls" class="mb-4 d-flex align-items-start" hidden>' in response.text
@@ -753,6 +756,187 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     assert response.text.endswith('hx-swap-oob="innerHTML"></div>')
     assert not (uploads_dir / "final_name.jpg").exists()
     assert (tmp_path / "memes" / "final_name.jpg").exists()
+
+
+def test_prune_cli_removes_rows_without_existing_images(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Drop metadata rows whose source files are no longer present."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    image_filename = uploads_dir / "kept.jpg"
+    Image.new("RGB", (8, 8), "red").save(image_filename)
+    metadata_filename = uploads_dir / "image_metadata.csv"
+
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(image_filename),
+                "original_filename": "kept.jpg",
+                "width": "8",
+                "height": "8",
+                "category": "art",
+                "genre": "mock",
+                "filename": "kept.jpg",
+                "clean_filename": "kept.jpg",
+                "filename_already_makes_sense": "True",
+                "tags": "art;mock",
+                "description": "Keep me.",
+            }
+        )
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(uploads_dir / "missing.jpg"),
+                "original_filename": "missing.jpg",
+                "width": "8",
+                "height": "8",
+                "category": "art",
+                "genre": "mock",
+                "filename": "missing.jpg",
+                "clean_filename": "missing.jpg",
+                "filename_already_makes_sense": "True",
+                "tags": "art;mock",
+                "description": "Remove me.",
+            }
+        )
+
+    output = run_cli("prune", str(uploads_dir))
+
+    assert output == "removed 1 row(s) from image_metadata.csv\n"
+    with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
+        rows = list(csv.DictReader(metadata_file))
+    assert [row["original_filename"] for row in rows] == ["kept.jpg"]
+    assert "Remove me." not in metadata_filename.read_text(encoding="utf-8")
+
+
+def test_shelve_cli_moves_misplaced_images_from_directory_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_cli: Callable[..., str],
+) -> None:
+    """Shelve matching categories from any configured alias directory."""
+    monkeypatch.chdir(tmp_path)
+    stackmap_filename = tmp_path / ".stackmap"
+    stackmap_filename.write_text(
+        "default: shelves/inbox\nart: shelves/art\nbooks: shelves/books\n",
+        encoding="utf-8",
+    )
+    books_dir = tmp_path / "shelves" / "books"
+    art_dir = tmp_path / "shelves" / "art"
+    books_dir.mkdir(parents=True)
+    art_dir.mkdir(parents=True)
+    misplaced = books_dir / "misplaced_art.jpg"
+    correct = books_dir / "books.jpg"
+    Image.new("RGB", (10, 10), "red").save(misplaced)
+    Image.new("RGB", (10, 10), "blue").save(correct)
+    metadata_filename = books_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(misplaced),
+                "original_filename": misplaced.name,
+                "width": "10",
+                "height": "10",
+                "category": "art",
+                "genre": "mock",
+                "filename": misplaced.name,
+                "clean_filename": misplaced.name,
+                "filename_already_makes_sense": "True",
+                "tags": "art;mock",
+                "description": "Move me.",
+            }
+        )
+        writer.writerow(
+            {
+                "timestamp": "2026-06-15T17:20:57.966360",
+                "status": "ok",
+                "total_tokens": "42",
+                "provider_name": "Mock",
+                "model": "mock-vision",
+                "original_filepath": str(correct),
+                "original_filename": correct.name,
+                "width": "10",
+                "height": "10",
+                "category": "books",
+                "genre": "mock",
+                "filename": correct.name,
+                "clean_filename": correct.name,
+                "filename_already_makes_sense": "True",
+                "tags": "books;mock",
+                "description": "Keep me here.",
+            }
+        )
+
+    run_cli("shelve", "books")
+
+    assert not misplaced.exists()
+    assert (art_dir / misplaced.name).exists()
+    assert correct.exists()
+    assert (books_dir / "image_metadata.csv").exists()
+
+
+def test_prune_metadata_rows_removes_empty_metadata_file(
+    tmp_path: Path,
+) -> None:
+    """Delete metadata files after they are fully pruned to empty."""
+    metadata_filename = tmp_path / "image_metadata.csv"
+    metadata_filename.write_text(
+        "timestamp,status,original_filepath,original_filename\n",
+        encoding="utf-8",
+    )
+
+    assert it.prune_metadata_rows(metadata_filename, verbose=0) == 0
+    assert not metadata_filename.exists()
+
+
+def test_review_metadata_cleans_backup_on_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure the review server removes its backup when interrupted."""
+    metadata_filename = tmp_path / "image_metadata.csv"
+    metadata_filename.write_text(
+        "timestamp,status,original_filepath,original_filename\n",
+        encoding="utf-8",
+    )
+    backup_filename = metadata_filename.with_suffix(".csv.bak")
+    backup_filename.write_text("backup", encoding="utf-8")
+
+    monkeypatch.setattr(review_app.webbrowser, "open", lambda *args, **kwargs: None)
+
+    import uvicorn
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    review_app.review_metadata(
+        metadata_filename,
+        stackmap=write_test_stackmap(tmp_path),
+    )
+
+    assert not backup_filename.exists()
 
 
 def test_review_cli_exits_if_metadata_is_missing(

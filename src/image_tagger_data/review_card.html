@@ -38,6 +38,11 @@
         </div>
 
         <div class="form-group">
+            <label for="original-filename-{{ item.row_id }}">Original Filename</label>
+            <input id="original-filename-{{ item.row_id }}" class="form-control form-control-sm" value="{{ item.original_filename }}" readonly>
+        </div>
+
+        <div class="form-group">
             <label for="tags-{{ item.row_id }}">Tags</label>
             <textarea id="tags-{{ item.row_id }}" name="tags" class="form-control tags-field">{{ item.tags_text }}</textarea>
             <small class="form-text text-muted">Semicolon-separated.</small>

@@ -82,6 +82,15 @@ def dedupe_uploads(args: argparse.Namespace) -> None:
         preview(args.directory / it.DEDUPE_REVIEW_FILENAME)
 
 
+def prune_uploads(args: argparse.Namespace) -> None:
+    """Remove rows whose image files are missing from the metadata CSV."""
+    it.prune_metadata_rows(
+        args.metadata_filename,
+        verbose=args.verbose,
+        dry_run=args.dry_run,
+    )
+
+
 def rename_uploads(args: argparse.Namespace) -> None:
     """Rename uploads from metadata."""
     it.rename_images(
@@ -268,6 +277,12 @@ def build_parser() -> argparse.ArgumentParser:
     tag_parser.add_argument("--instructions-filename", type=path_arg)
     tag_parser.add_argument("--retry-errors", action="store_true")
     tag_parser.set_defaults(func=tag_uploads)
+
+    prune_parser = subparsers.add_parser(
+        "prune", help="Remove metadata rows whose image files are missing."
+    )
+    add_common_upload_args(prune_parser)
+    prune_parser.set_defaults(func=prune_uploads)
 
     rename_parser = subparsers.add_parser(
         "rename", help="Rename uploads from metadata suggestions."

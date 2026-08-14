@@ -1280,6 +1280,59 @@ def generate_wall(
     return output_path
 
 
+def prune_metadata_rows(
+    csv_filename: Pathish,
+    *,
+    verbose: int = 1,
+    dry_run: bool = False,
+) -> int:
+    """Remove metadata rows whose image files are no longer present."""
+    csv_path = Path(csv_filename)
+    if not csv_path.is_file():
+        if verbose >= 1:
+            print(f"no metadata file: {csv_path.name}")
+        return 0
+
+    try:
+        metadata_df = pd.read_csv(csv_path, keep_default_na=False)
+    except pd.errors.EmptyDataError:
+        if not dry_run:
+            csv_path.unlink(missing_ok=True)
+        if verbose >= 1:
+            print(f"removed 0 row(s) from {csv_path.name}")
+        return 0
+
+    rows_to_keep: list[dict[str, Any]] = []
+    removed_count = 0
+
+    for raw_item in metadata_df.to_dict("records"):
+        item = cast("dict[str, Any]", raw_item)
+        original_path = str(item.get("original_filepath", "")).strip()
+        clean_filename = str(item.get("clean_filename", "")).strip()
+        candidate_paths = [Path(original_path)] if original_path else []
+        if original_path and clean_filename:
+            candidate_paths.append(Path(original_path).with_name(clean_filename))
+        if any(path.is_file() for path in candidate_paths):
+            rows_to_keep.append(item)
+            continue
+        if verbose >= 2:
+            print(f"removing row: {original_path}")
+        removed_count += 1
+
+    if not dry_run:
+        if rows_to_keep:
+            pd.DataFrame(rows_to_keep, columns=metadata_df.columns).to_csv(
+                csv_path,
+                index=False,
+            )
+        else:
+            csv_path.unlink(missing_ok=True)
+
+    if verbose >= 1:
+        print(f"removed {removed_count} row(s) from {csv_path.name}")
+    return removed_count
+
+
 def rename_images(
     csv_filename: Pathish,
     verbose: int = 1,
@@ -1402,16 +1455,29 @@ def append_shelved_metadata(
     )
 
 
+def _stackmap_alias_for_directory(stackmap: StackMap, directory: Path) -> str | None:
+    """Return the configured shelf alias for a directory, if any."""
+    resolved_directory = directory.resolve()
+    for alias, shelf_directory in stackmap.shelves.items():
+        if shelf_directory == resolved_directory:
+            return alias
+    return None
+
+
 def shelve_images(
     csv_filename: Pathish,
     stackmap: StackMap,
     verbose: int = 1,
     dry_run: bool = False,
 ) -> None:
-    """Move images into category folders."""
+    """Move images into category folders, while keeping the current shelf scoped."""
     csv_path = Path(csv_filename)
+    if not csv_path.is_file():
+        return
+
     metadata_df = pd.read_csv(csv_path)
     display_directory = stackmap.filename.parent
+    current_alias = _stackmap_alias_for_directory(stackmap, csv_path.parent)
     if verbose == 1:
         print(f"working in {quote_display_path(display_directory)}")
     for index, row in metadata_df.iterrows():
@@ -1433,8 +1499,17 @@ def shelve_images(
             continue
 
         category = str(row["category"]).strip()
+        if category == "default" or category not in stackmap.shelves:
+            if verbose >= 1:
+                print(f"category {category!r} is not a configured shelf; skipping {source!r}")
+            continue
+        if current_alias is not None and category == current_alias:
+            if verbose >= 2:
+                print(f"already in correct shelf {category!r}; skipping {source!r}")
+            continue
+
         target_directory = stackmap.directory_for(category)
-        if target_directory is None or category == "default":
+        if target_directory is None:
             if verbose >= 1:
                 print(f"category {category!r} is not a configured shelf; skipping {source!r}")
             continue
@@ -1482,6 +1557,9 @@ def shelve_images(
             else:
                 print(f"error moving {os.fspath(source)!r} to {os.fspath(target)!r}!")
             traceback.print_exc()
+
+    if not dry_run:
+        prune_metadata_rows(csv_path, verbose=verbose)
 
 
 def generate_gallery(

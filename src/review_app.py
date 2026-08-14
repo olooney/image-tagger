@@ -91,6 +91,8 @@ def first_available_port(start_port: int = 8001) -> int:
 
 def review_category_options(metadata_path: Path) -> list[str]:
     """Return category options from the tagging prompt."""
+    if not metadata_path.is_file():
+        return []
     metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
     categories = list(CATEGORY_OPTIONS)
     if "category" in metadata_df:
@@ -103,6 +105,8 @@ def review_category_options(metadata_path: Path) -> list[str]:
 
 def review_genre_options(metadata_path: Path) -> list[str]:
     """Return genre options from the tagging prompt."""
+    if not metadata_path.is_file():
+        return []
     metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
     genres = list(GENRE_OPTIONS)
     if "genre" not in metadata_df:
@@ -128,6 +132,8 @@ def current_image_path(row: pd.Series[Any]) -> Path | None:
 
 def review_items(metadata_path: Path) -> list[dict[str, Any]]:
     """Return editable review rows from a metadata CSV."""
+    if not metadata_path.is_file():
+        return []
     metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
     items: list[dict[str, Any]] = []
     for index, raw_item in enumerate(metadata_df.to_dict("records"), start=1):
@@ -182,6 +188,9 @@ def rename_review_image(
 
 def write_metadata_row(metadata_path: Path, row_id: int, updates: dict[str, str]) -> None:
     """Write editable field updates for one one-based CSV row."""
+    if not metadata_path.is_file():
+        raise ValueError(f"Metadata file not found: {metadata_path}")
+
     editable_columns = {"category", "genre", "clean_filename", "tags", "description"}
     metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
     row_index = row_id - 1
@@ -213,6 +222,9 @@ def write_metadata_row(metadata_path: Path, row_id: int, updates: dict[str, str]
 
 def delete_metadata_row_image(metadata_path: Path, row_id: int) -> None:
     """Delete the current image for one one-based CSV row and hide it from review."""
+    if not metadata_path.is_file():
+        raise ValueError(f"Metadata file not found: {metadata_path}")
+
     metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
     row_index = row_id - 1
     if row_index < 0 or row_index >= len(metadata_df):
@@ -262,9 +274,14 @@ def render_review_list(
 
 def render_shelve_response(metadata_path: Path, output: str) -> str:
     """Render the shelve report and refreshed review card list."""
-    categories = review_category_options(metadata_path)
-    genres = review_genre_options(metadata_path)
-    items = review_items(metadata_path)
+    if not metadata_path.is_file():
+        categories = []
+        genres = []
+        items: list[dict[str, Any]] = []
+    else:
+        categories = review_category_options(metadata_path)
+        genres = review_genre_options(metadata_path)
+        items = review_items(metadata_path)
     report = f'<pre class="shelve-report">{html.escape(output)}</pre>'
     return "".join(
         [
@@ -358,8 +375,18 @@ def review_metadata(
     """Serve a local metadata review app and open it in a browser."""
     import uvicorn
 
-    set_review_metadata(metadata_filename, stackmap)
+    metadata_path = Path(metadata_filename)
+    backup_path = metadata_path.with_suffix(f"{metadata_path.suffix}.bak")
+    set_review_metadata(metadata_path, stackmap)
     port = first_available_port(start_port)
     url = f"http://127.0.0.1:{port}"
     webbrowser.open(url)
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port)
+    except KeyboardInterrupt:
+        if backup_path.exists():
+            backup_path.unlink()
+        raise
+    finally:
+        if backup_path.exists():
+            backup_path.unlink()
