@@ -2,6 +2,7 @@ import base64
 import csv
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -1125,19 +1126,30 @@ def median_aspect_ratio(aspect_ratios: Iterable[float]) -> float:
 
 def image_aspect_ratios(filepaths: Iterable[Pathish]) -> dict[Path, float]:
     """Return display width-to-height ratios keyed by image path."""
+    aspect_ratios, _ = image_aspect_ratios_and_pixel_counts(filepaths)
+    return aspect_ratios
+
+
+def image_aspect_ratios_and_pixel_counts(
+    filepaths: Iterable[Pathish],
+) -> tuple[dict[Path, float], dict[Path, int]]:
+    """Return display aspect ratios and pixel counts keyed by image path."""
     aspect_ratios: dict[Path, float] = {}
+    pixel_counts: dict[Path, int] = {}
     for filepath in filepaths:
         image_path = Path(filepath)
         with Image.open(image_path) as image:
             width, height = ImageOps.exif_transpose(image).size
         if height > 0:
             aspect_ratios[image_path] = width / height
+            pixel_counts[image_path] = width * height
 
-    return aspect_ratios
+    return aspect_ratios, pixel_counts
 
 
 WALL_DOUBLE_WIDE_THRESHOLD: float = 1.7
 WALL_LAYOUT_MAX_PASSES: int = 3
+WALL_CROP_MINIMIZATION_PASSES: int = 12
 
 
 def infer_wall_layout(
@@ -1165,6 +1177,108 @@ def infer_wall_layout(
         filepath
         for filepath, aspect_ratio in aspect_ratios.items()
         if aspect_ratio > WALL_DOUBLE_WIDE_THRESHOLD * cell_aspect_ratio
+    }
+    return cell_aspect_ratio, double_wide_paths
+
+
+def wall_crop_loss(
+    aspect_ratios: Mapping[Path, float],
+    cell_aspect_ratio: float,
+    double_wide_paths: set[Path],
+    pixel_counts: Mapping[Path, int] | None = None,
+) -> float:
+    """Return the total pixel-weighted crop loss for a wall layout."""
+    crop_loss = 0.0
+    for filepath, aspect_ratio in aspect_ratios.items():
+        tile_aspect_ratio = cell_aspect_ratio * (
+            2 if filepath in double_wide_paths else 1
+        )
+        visible_fraction = min(
+            aspect_ratio / tile_aspect_ratio,
+            tile_aspect_ratio / aspect_ratio,
+        )
+        crop_loss += (pixel_counts or {}).get(filepath, 1) * (1 - visible_fraction)
+    return crop_loss
+
+
+def minimize_wall_crop_layout(
+    aspect_ratios: Mapping[Path, float],
+    pixel_counts: Mapping[Path, int] | None = None,
+) -> tuple[float, set[Path]]:
+    """Minimize crop loss for one- and two-wide wall tiles."""
+    if not aspect_ratios:
+        return 1.0, set()
+
+    log_lower = math.log(min(aspect_ratios.values()) / 2)
+    log_upper = math.log(max(aspect_ratios.values()))
+    for _ in range(WALL_CROP_MINIMIZATION_PASSES):
+        log_middle = (log_lower + log_upper) / 2
+        log_offset = (log_upper - log_lower) / 100
+        left_aspect_ratio = math.exp(log_middle - log_offset)
+        right_aspect_ratio = math.exp(log_middle + log_offset)
+        left_double_wide_paths = {
+            filepath
+            for filepath, aspect_ratio in aspect_ratios.items()
+            if wall_crop_loss(
+                {filepath: aspect_ratio},
+                left_aspect_ratio,
+                {filepath},
+                pixel_counts,
+            )
+            < wall_crop_loss(
+                {filepath: aspect_ratio},
+                left_aspect_ratio,
+                set(),
+                pixel_counts,
+            )
+        }
+        right_double_wide_paths = {
+            filepath
+            for filepath, aspect_ratio in aspect_ratios.items()
+            if wall_crop_loss(
+                {filepath: aspect_ratio},
+                right_aspect_ratio,
+                {filepath},
+                pixel_counts,
+            )
+            < wall_crop_loss(
+                {filepath: aspect_ratio},
+                right_aspect_ratio,
+                set(),
+                pixel_counts,
+            )
+        }
+        if wall_crop_loss(
+            aspect_ratios,
+            left_aspect_ratio,
+            left_double_wide_paths,
+            pixel_counts,
+        ) < wall_crop_loss(
+            aspect_ratios,
+            right_aspect_ratio,
+            right_double_wide_paths,
+            pixel_counts,
+        ):
+            log_upper = log_middle
+        else:
+            log_lower = log_middle
+
+    cell_aspect_ratio = math.exp((log_lower + log_upper) / 2)
+    double_wide_paths = {
+        filepath
+        for filepath, aspect_ratio in aspect_ratios.items()
+        if wall_crop_loss(
+            {filepath: aspect_ratio},
+            cell_aspect_ratio,
+            {filepath},
+            pixel_counts,
+        )
+        < wall_crop_loss(
+            {filepath: aspect_ratio},
+            cell_aspect_ratio,
+            set(),
+            pixel_counts,
+        )
     }
     return cell_aspect_ratio, double_wide_paths
 
@@ -1276,8 +1390,11 @@ def generate_wall(
             )
     else:
         raise ValueError(f"Unsupported wall order: {order}")
-    aspect_ratios = image_aspect_ratios(filepaths)
-    aspect_ratio, double_wide_paths = infer_wall_layout(aspect_ratios)
+    aspect_ratios, pixel_counts = image_aspect_ratios_and_pixel_counts(filepaths)
+    aspect_ratio, double_wide_paths = minimize_wall_crop_layout(
+        aspect_ratios,
+        pixel_counts,
+    )
     cell_width = 200
     cell_height = round(cell_width / aspect_ratio)
     metadata_titles = wall_metadata_titles(metadata_filename)

@@ -1040,7 +1040,7 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert html.startswith("<!doctype html>")
     assert "<title>Book Wall</title>" in html
     assert "--cell-width: 200px;" in html
-    assert "--cell-height: 100px;" in html
+    assert "--cell-height: 80px;" in html
     assert "grid-template-columns: repeat(auto-fill" in html
     assert "grid-auto-rows: var(--cell-height);" in html
     assert "object-fit: cover;" in html
@@ -1105,6 +1105,23 @@ def test_infer_wall_layout_reweights_double_wide_images() -> None:
 
     assert cell_aspect_ratio == pytest.approx(1.05)
     assert double_wide_paths == {Path("wide.jpg"), Path("wider.jpg")}
+
+
+def test_minimize_wall_crop_layout_finds_camera_layout() -> None:
+    """Find the lower-crop layout for a portrait camera gallery."""
+    aspect_ratios = {
+        Path("portrait-1.jpg"): 0.75,
+        Path("portrait-2.jpg"): 0.75,
+        Path("portrait-3.jpg"): 0.75,
+        Path("landscape.jpg"): 4 / 3,
+    }
+
+    cell_aspect_ratio, double_wide_paths = it.minimize_wall_crop_layout(
+        aspect_ratios,
+    )
+
+    assert cell_aspect_ratio == pytest.approx(0.75, abs=0.01)
+    assert double_wide_paths == {Path("landscape.jpg")}
 
 
 def test_wall_cli_title_can_be_overridden(
