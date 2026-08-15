@@ -29,7 +29,7 @@ from pydantic import BaseModel, create_model
 from send2trash import send2trash
 from send2trash.exceptions import TrashPermissionError
 
-from constants import WELCOME_EXTENSIONS
+from constants import WELCOME_EXTENSIONS, DEFAULT_WALL_RANDOM_SEED
 from stackmap import StackMap
 from util import (
     Pathish,
@@ -1214,9 +1214,6 @@ def infer_wall_layout(
 def paths_with_mtime(filepaths: Iterable[Pathish]) -> list[tuple[float, Path]]:
     """Return file paths paired with their modification times."""
     return [(Path(filepath).stat().st_mtime, Path(filepath)) for filepath in filepaths]
-
-
-DEFAULT_WALL_RANDOM_SEED: int = 37
 
 
 def seeded_wall_sort_key(directory: Path, filepath: Path, seed: int) -> tuple[bytes, str]:

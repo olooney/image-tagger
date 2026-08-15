@@ -373,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed",
         type=int,
         default=it.DEFAULT_WALL_RANDOM_SEED,
-        help="Seed for deterministic random wall ordering. Defaults to 37.",
+        help=f"Seed for deterministic random wall ordering. Defaults to {it.DEFAULT_WALL_RANDOM_SEED}.",
     )
     wall_parser.add_argument(
         "--title",

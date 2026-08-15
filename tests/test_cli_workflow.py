@@ -1185,11 +1185,11 @@ def test_wall_cli_random_order_accepts_seed(
     assert first_html != different_html
 
 
-def test_wall_cli_random_order_defaults_to_seed_37(
+def test_wall_cli_random_order_defaults_to_seed(
     tmp_path: Path,
     run_cli: Callable[..., str],
 ) -> None:
-    """Use seed 37 for random wall ordering when no seed is provided."""
+    """Use seed for random wall ordering when no seed is provided."""
     uploads_dir = tmp_path / "uploads"
     uploads_dir.mkdir()
     for filename in ["alpha.jpg", "bravo.jpg", "charlie.jpg", "delta.jpg"]:
@@ -1197,7 +1197,7 @@ def test_wall_cli_random_order_defaults_to_seed_37(
 
     run_cli("wall", str(uploads_dir), "--no-preview")
     default_seed_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
-    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "37", "--no-preview")
+    run_cli("wall", str(uploads_dir), "--order", "random", "--seed", "42", "--no-preview")
     explicit_seed_html = (uploads_dir / "index.html").read_text(encoding="utf-8")
 
     assert default_seed_html == explicit_seed_html

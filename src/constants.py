@@ -1,5 +1,7 @@
 from pathlib import Path
 
+DEFAULT_WALL_RANDOM_SEED: int = 42
+
 METADATA_FILENAME: Path = Path("image_metadata.csv")
 GALLERY_NAME: Path = Path("index.html")
 
