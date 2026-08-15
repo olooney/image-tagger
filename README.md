@@ -48,6 +48,10 @@ the file contents do not match the name, converts lossless or uncompressed
 formats such as BMP and GIF to PNG, converts lossy formats such as WEBP, AVIF,
 and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
+Pass `-w` or `--welcome-extensions` with a comma-delimited list to replace the
+default welcome formats, such as `just convert uploads -w jpg` to convert every
+other supported format to JPEG.
+
 Every command uses a `.stackmap` configuration file. The CLI searches upward
 from the directory where it was run, then falls back to `~/.stackmap`; pass
 `--stackmap PATH` to use a specific file. Shelf names are identifiers, and

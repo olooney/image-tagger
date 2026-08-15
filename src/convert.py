@@ -154,6 +154,7 @@ def fix_image_extension(
 def conversion_target(
     filename: Path,
     detected_format: str | None = None,
+    welcome_extensions: Sequence[str] = (".jpg", ".png"),
 ) -> tuple[Path, str]:
     """Choose a converted filename and Pillow format."""
     if detected_format is None:
@@ -168,28 +169,46 @@ def conversion_target(
         raise ValueError(
             f"Unsupported image format {detected_format!r} for {filename}."
         )
+
+    if output_extension not in welcome_extensions:
+        for extension, image_format_name in [(".jpg", "JPEG"), (".png", "PNG")]:
+            if extension in welcome_extensions:
+                output_extension = extension
+                output_format = image_format_name
+                break
+        else:
+            raise ValueError(
+                "Welcome extensions must include .jpg or .png to convert images."
+            )
     return Path(make_unique(filename.with_suffix(output_extension))), output_format
 
 
 def convert_images(
     directory: Pathish,
     input_extensions: Sequence[str] = UNWELCOME_EXTENSIONS,
+    welcome_extensions: Sequence[str] = (".jpg", ".png"),
     dry_run: bool = False,
     verbose: int = 1,
-) -> None:
-    """Convert unwelcome image formats to a target format."""
+) -> list[tuple[Path, Path]]:
+    """Convert unwelcome image formats and return filename changes."""
     display_directory = Path(directory)
+    file_changes: list[tuple[Path, Path]] = []
     for filename in list_images(directory):
+        original_filename = filename
         filename, detected_format = fix_image_extension(
             filename,
             dry_run=dry_run,
             verbose=verbose,
             relative_to=display_directory,
         )
+        if filename != original_filename:
+            file_changes.append((original_filename, filename))
         if expected_extension(detected_format) in input_extensions:
             # choose a collision-free output filename
             output_filename, output_format = conversion_target(
-                filename, detected_format
+                filename,
+                detected_format,
+                welcome_extensions,
             )
 
             if verbose >= 1:
@@ -207,12 +226,14 @@ def convert_images(
                 if not dry_run:
                     with Image.open(filename) as img:
                         img.convert("RGB").save(output_filename, output_format)
+                file_changes.append((filename, output_filename))
                 if verbose >= 1:
                     print("success!")
             except Exception:
                 if verbose >= 1:
                     print("error!")
                 raise
+    return file_changes
 
 
 def delete_duplicate_images(
@@ -220,9 +241,10 @@ def delete_duplicate_images(
     input_extensions: Sequence[str] = UNWELCOME_EXTENSIONS,
     dry_run: bool = False,
     verbose: int = 1,
-) -> None:
-    """Remove unwelcome duplicates when welcome copies exist."""
+) -> list[tuple[Path, Path]]:
+    """Remove unwelcome duplicates and return filename changes."""
     display_directory = Path(directory)
+    file_changes: list[tuple[Path, Path]] = []
     dupes = find_duplicate_basenames(directory)
     for _base, filenames in dupes.items():
         welcome_filenames = [
@@ -248,21 +270,24 @@ def delete_duplicate_images(
                     try:
                         if not dry_run:
                             unwelcome_filename.unlink()
+                        file_changes.append((unwelcome_filename, welcome_filename))
                         if verbose >= 1:
                             print("success!")
                     except Exception:
                         if verbose >= 1:
                             print("error!")
                         raise
+    return file_changes
 
 
 def normalize_image_extensions(
     directory: Pathish,
     dry_run: bool = False,
     verbose: int = 1,
-) -> None:
-    """Lowercase supported image extensions."""
+) -> list[tuple[Path, Path]]:
+    """Lowercase supported image extensions and return filename changes."""
     display_directory = Path(directory)
+    file_changes: list[tuple[Path, Path]] = []
     for filename in list_images(directory):
         if filename.suffix.lower() in IMAGE_EXTENSIONS:
             new_file = filename.with_suffix(filename.suffix.lower())
@@ -281,12 +306,14 @@ def normalize_image_extensions(
                 try:
                     if not dry_run:
                         filename.rename(new_file)
+                    file_changes.append((filename, new_file))
                     if verbose >= 1:
                         print("success!")
                 except Exception:
                     if verbose >= 1:
                         print("error!")
                     raise
+    return file_changes
 
 
 def count_files_by_extension(directory: Pathish) -> dict[str, int]:
@@ -312,17 +339,21 @@ def rename_jpeg_to_jpg(
     directory: Pathish,
     dry_run: bool = False,
     verbose: int = 1,
-) -> None:
-    """Rename .jpeg files to .jpg."""
+) -> list[tuple[Path, Path]]:
+    """Rename .jpeg files to .jpg and return filename changes."""
     display_directory = Path(directory)
+    file_changes: list[tuple[Path, Path]] = []
     for filename in list_images(directory):
         if filename.suffix.lower() == ".jpeg":
+            original_filename = filename
             filename, detected_format = fix_image_extension(
                 filename,
                 dry_run=dry_run,
                 verbose=verbose,
                 relative_to=display_directory,
             )
+            if filename != original_filename:
+                file_changes.append((original_filename, filename))
             if detected_format != "JPEG" or filename.suffix.lower() != ".jpeg":
                 continue
             new_file = filename.with_suffix(".jpg")
@@ -340,12 +371,14 @@ def rename_jpeg_to_jpg(
             try:
                 if not dry_run:
                     filename.rename(new_file)
+                file_changes.append((filename, new_file))
                 if verbose >= 1:
                     print("success!")
             except Exception:
                 if verbose >= 1:
                     print("error!")
                 raise
+    return file_changes
 
 
 def main(

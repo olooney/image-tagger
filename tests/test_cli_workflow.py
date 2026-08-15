@@ -1567,6 +1567,72 @@ def test_convert_fixes_mismatched_image_formats(
     assert (uploads_dir / "speculative.jpg").exists()
 
 
+def test_convert_updates_existing_metadata_filenames(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Synchronize metadata when conversion changes an existing image file."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    source = uploads_dir / "comics.bmp"
+    shutil.copy2(REPO_ROOT / "tests" / "images" / "comics.bmp", source)
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(
+            metadata_file,
+            fieldnames=[
+                "status",
+                "original_filepath",
+                "original_filename",
+                "clean_filename",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(source),
+                "original_filename": source.name,
+                "clean_filename": "garfield.bmp",
+            }
+        )
+
+    run_cli("convert", str(uploads_dir))
+
+    with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
+        row = next(csv.DictReader(metadata_file))
+    assert row["original_filepath"] == str(uploads_dir / "comics.png")
+    assert row["original_filename"] == "comics.png"
+    assert row["clean_filename"] == "garfield.png"
+
+
+def test_convert_allows_welcome_extensions_override(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Convert to the custom welcome extension."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    shutil.copy2(
+        REPO_ROOT / "tests" / "images" / "a.b.webp", uploads_dir / "image.webp"
+    )
+    shutil.copy2(
+        REPO_ROOT / "tests" / "images" / "comics.bmp", uploads_dir / "other.bmp"
+    )
+
+    output = run_cli(
+        "convert",
+        str(uploads_dir),
+        "-w",
+        "jpg",
+    )
+
+    assert "converting image.webp to image.jpg ...success!" in output
+    assert "converting other.bmp to other.jpg ...success!" in output
+    assert (uploads_dir / "image.jpg").exists()
+    assert (uploads_dir / "other.jpg").exists()
+
+
 @pytest.mark.parametrize(
     ("verbosity_args", "expected"),
     [

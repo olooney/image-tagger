@@ -385,6 +385,47 @@ def fix_extension(current_filename: str, suggested_filename: str) -> str:
     return suggested_path.name
 
 
+def update_metadata_filepaths(
+    metadata_filename: Pathish,
+    file_changes: Iterable[tuple[Path, Path]],
+) -> None:
+    """Update metadata rows after image filenames change."""
+    metadata_path = Path(metadata_filename)
+    if not metadata_path.is_file():
+        return
+
+    final_paths: dict[Path, Path] = {}
+    for source, target in file_changes:
+        for original_path, current_path in final_paths.items():
+            if current_path == source:
+                final_paths[original_path] = target
+        final_paths[source] = target
+
+    if not final_paths:
+        return
+
+    metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
+    metadata_updated = False
+    for index, row in metadata_df.iterrows():
+        source = Path(row["original_filepath"])
+        target = final_paths.get(source)
+        if target is None:
+            continue
+
+        metadata_df.at[index, "original_filepath"] = os.fspath(target)
+        metadata_df.at[index, "original_filename"] = target.name
+        clean_filename = str(row["clean_filename"])
+        if clean_filename:
+            metadata_df.at[index, "clean_filename"] = fix_extension(
+                target.name,
+                clean_filename,
+            )
+        metadata_updated = True
+
+    if metadata_updated:
+        metadata_df.to_csv(metadata_path, index=False)
+
+
 def path_name_ext(path: Pathish) -> tuple[str, str, str]:
     """Split a path into directory, stem, and extension."""
     image_path = Path(path)

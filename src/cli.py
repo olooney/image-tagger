@@ -4,7 +4,7 @@ from pathlib import Path
 
 import image_tagger as it
 import review_app
-from constants import GALLERY_NAME, METADATA_FILENAME, WELCOME_EXTENSIONS
+from constants import IMAGE_EXTENSIONS, GALLERY_NAME, METADATA_FILENAME, WELCOME_EXTENSIONS
 from convert import (
     convert_images,
     count_files_by_extension,
@@ -38,12 +38,44 @@ def extensions_arg(value: str) -> list[str]:
 def convert_uploads(args: argparse.Namespace) -> None:
     """Run upload conversion steps."""
     directory = args.directory
+    unwelcome_extensions = [
+        extension
+        for extension in IMAGE_EXTENSIONS
+        if extension not in args.welcome_extensions
+    ]
     if args.verbose == 1:
         print(f"working in {quote_display_path(directory)}")
-    convert_images(directory, dry_run=args.dry_run, verbose=args.verbose)
-    delete_duplicate_images(directory, dry_run=args.dry_run, verbose=args.verbose)
-    normalize_image_extensions(directory, dry_run=args.dry_run, verbose=args.verbose)
-    rename_jpeg_to_jpg(directory, dry_run=args.dry_run, verbose=args.verbose)
+    file_changes = convert_images(
+        directory,
+        input_extensions=unwelcome_extensions,
+        welcome_extensions=args.welcome_extensions,
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+    )
+    file_changes.extend(
+        delete_duplicate_images(
+            directory,
+            input_extensions=unwelcome_extensions,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    )
+    file_changes.extend(
+        normalize_image_extensions(
+            directory,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    )
+    file_changes.extend(
+        rename_jpeg_to_jpg(
+            directory,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    )
+    if not args.dry_run:
+        it.update_metadata_filepaths(args.metadata_filename, file_changes)
     if args.verbose >= 1:
         print(format_extension_counts(count_files_by_extension(directory)))
 
@@ -232,6 +264,13 @@ def build_parser() -> argparse.ArgumentParser:
         "convert", help="Convert uploads to preferred formats."
     )
     add_common_upload_args(convert_parser)
+    convert_parser.add_argument(
+        "-w",
+        "--welcome-extensions",
+        type=extensions_arg,
+        default=WELCOME_EXTENSIONS,
+        help="Comma-delimited image extensions to preserve.",
+    )
     convert_parser.set_defaults(func=convert_uploads)
 
     dedupe_parser = subparsers.add_parser(
