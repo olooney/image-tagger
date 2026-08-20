@@ -19,7 +19,11 @@
             padding: 0.5rem 0;
         }
         .path { overflow-wrap: anywhere; }
-        .action { color: #800000; font-weight: bold; }
+        .filename-mismatch {
+            padding: 0.125rem 0.25rem;
+            background-color: #ffeb00;
+            color: #1a1a1a;
+        }
         .reason { white-space: pre-wrap; }
     </style>
 </head>
@@ -62,7 +66,9 @@
                         </figure>
                     </section>
                     <section class="col-md-6">
-                        <p class="action">{{ entry.action }}</p>
+                        {% if entry.action %}
+                            <p{% if entry.is_removal %} class="filename-mismatch"{% endif %}>{{ entry.action }}</p>
+                        {% endif %}
                         <p><strong>Decision:</strong> {{ "Automatic CLIP match" if entry.decision_source == "clip" else "LLM adjudicated" }}</p>
                         <p><strong>Similarity:</strong> {{ "%.2f" | format(entry.score * 100) }}%</p>
                         {% if entry.judgement_text %}

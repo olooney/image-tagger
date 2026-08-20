@@ -10,6 +10,7 @@ from contextlib import redirect_stdout
 from io import BytesIO, StringIO
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -202,6 +203,69 @@ class FakeImageComparisonMethod:
             for left_path, right_path in pairs
             if (score := self.scores.get((left_path.name, right_path.name))) is not None
         ]
+
+
+class FakeClipEmbedder:
+    """Embed batches predictably while recording work performed."""
+
+    def __init__(self) -> None:
+        """Start with no embedded batches."""
+        self.batch_sizes: list[int] = []
+
+    def embed_images(self, images: list[Image.Image]) -> np.ndarray:
+        """Return one constant vector per image."""
+        self.batch_sizes.append(len(images))
+        return np.ones((len(images), 3), dtype=np.float64)
+
+
+def test_clip_comparison_defers_model_loading() -> None:
+    """Avoid loading CLIP until an uncached batch needs embedding."""
+    comparison_method = it.ClipImageComparisonMethod()
+
+    assert comparison_method.client is None
+
+
+def test_embed_image_paths_reuses_cached_vectors_for_unchanged_images(
+    tmp_path: Path,
+) -> None:
+    """Reuse persisted vectors and invalidate only changed image files."""
+    first_path = tmp_path / "first.jpg"
+    second_path = tmp_path / "second.jpg"
+    for path in [first_path, second_path]:
+        Image.new("RGB", (4, 4)).save(path)
+    cache_filename = tmp_path / "embeddings.npz"
+    clip_adapter = FakeClipEmbedder()
+
+    first_vectors = it.embed_image_paths(
+        [first_path, second_path],
+        clip_adapter=clip_adapter,
+        cache_filename=cache_filename,
+        cache_key="test-model",
+        verbose=0,
+    )
+    second_vectors = it.embed_image_paths(
+        [first_path, second_path],
+        clip_adapter=clip_adapter,
+        cache_filename=cache_filename,
+        cache_key="test-model",
+        verbose=0,
+    )
+    first_stat = first_path.stat()
+    os.utime(
+        first_path,
+        ns=(first_stat.st_atime_ns, first_stat.st_mtime_ns + 1_000_000_000),
+    )
+    it.embed_image_paths(
+        [first_path, second_path],
+        clip_adapter=clip_adapter,
+        cache_filename=cache_filename,
+        cache_key="test-model",
+        verbose=0,
+    )
+
+    assert cache_filename.is_file()
+    assert clip_adapter.batch_sizes == [2, 1]
+    assert np.array_equal(first_vectors, second_vectors)
 
 
 @pytest.fixture(autouse=True)
@@ -606,7 +670,10 @@ def test_generate_gallery_creates_expected_html(tmp_path: Path) -> None:
     assert "This row should not render." not in html
 
 
-def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
+def test_review_app_updates_one_based_metadata_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Edit one metadata row through the review app."""
     uploads_dir = tmp_path / "uploads"
     uploads_dir.mkdir()
@@ -654,6 +721,8 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     assert "Metadata:" not in response.text
     assert "Rows:" not in response.text
     assert "Delete" in response.text
+    assert "Rename" not in response.text
+    assert '<span class="filename-mismatch">' not in response.text
     assert 'Original Filename' in response.text
     assert 'readonly' in response.text
     assert "No images to review." in response.text
@@ -693,7 +762,7 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
                 "category": "art",
                 "genre": "mock",
                 "filename": image_filename.name,
-                "clean_filename": image_filename.name,
+                "clean_filename": "better_name.jpg",
                 "filename_already_makes_sense": "True",
                 "tags": "art;mock",
                 "description": "Original description.",
@@ -703,6 +772,12 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "Shelve" in response.text
+    assert "Rename" in response.text
+    assert '<span class="filename-mismatch">sample.jpg</span>' in response.text
+    assert 'src="/images/sample.jpg"' in response.text
+    assert 'data-accept-filename="sample.jpg"' in response.text
+    assert 'aria-label="Use current filename as clean filename"' in response.text
+    assert 'name="clean_filename" class="form-control"' in response.text
 
     response = client.post(
         "/row/1",
@@ -718,6 +793,7 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     assert "Saved." in response.text
     assert "memes" in response.text
     assert "better_name2.jpg" in response.text
+    assert 'src="/images/better_name2.jpg"' in response.text
 
     with metadata_filename.open(newline="", encoding="utf-8") as metadata_file:
         updated_row = next(csv.DictReader(metadata_file))
@@ -748,6 +824,23 @@ def test_review_app_updates_one_based_metadata_row(tmp_path: Path) -> None:
     assert not (uploads_dir / "better_name2.jpg").exists()
     assert (uploads_dir / "final_name.jpg").exists()
     assert metadata_filename.with_suffix(".csv.bak").exists()
+
+    def fail_save(*args: object, **kwargs: object) -> None:
+        raise OSError("The metadata file is locked.")
+
+    monkeypatch.setattr(review_app, "write_metadata_row", fail_save)
+    response = client.post(
+        "/row/1",
+        data={
+            "category": "memes",
+            "genre": "joke",
+            "clean_filename": "final_name.jpg",
+            "tags": "meme;mock",
+            "description": "Updated description.",
+        },
+    )
+    assert response.status_code == 500
+    assert response.text == "Could not save: The metadata file is locked."
 
     response = client.post("/shelve")
     assert response.status_code == 200
@@ -1975,13 +2068,15 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
     review_filename = uploads_dir / it.DEDUPE_REVIEW_FILENAME
     review_html = review_filename.read_text(encoding="utf-8")
     expected_action = (
-        "Right image would be removed as a duplicate."
+        "Right would remove"
         if dry_run
-        else "Right image was removed as a duplicate."
+        else "Right removed"
     )
     assert "data:image/png;base64," in review_html
     assert "Automatic CLIP match" in review_html
     assert expected_action in review_html
+    highlighted_action = f'<p class="filename-mismatch">{expected_action}</p>'
+    assert (highlighted_action in review_html) is not dry_run
     assert previewed_paths == [review_filename]
     encoded_thumbnails = re.findall(r'data:image/png;base64,([^"\']+)', review_html)
     thumbnail_sizes = [
@@ -1989,6 +2084,43 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
         for encoded_thumbnail in encoded_thumbnails
     ]
     assert thumbnail_sizes == [(500, 250), (188, 750)]
+
+
+def test_generate_dedupe_review_sorts_and_highlights_actual_removals(
+    tmp_path: Path,
+) -> None:
+    """Place actual removals first and highlight only their concise status."""
+    kept_entry = it.DedupeReviewEntry(
+        left_path=tmp_path / "kept-left.jpg",
+        right_path=tmp_path / "kept-right.jpg",
+        left_image_src=None,
+        right_image_src=None,
+        score=0.95,
+        decision_source="llm",
+        judgement_text="keep both",
+        action="Kept both",
+        duplicate_side="right",
+    )
+    removed_entry = it.DedupeReviewEntry(
+        left_path=tmp_path / "removed-left.jpg",
+        right_path=tmp_path / "removed-right.jpg",
+        left_image_src=None,
+        right_image_src=None,
+        score=1.0,
+        decision_source="clip",
+        judgement_text=None,
+        action="Right removed",
+        duplicate_side="right",
+        is_removal=True,
+    )
+    output_filename = tmp_path / "dedupe_review.html"
+
+    it.generate_dedupe_review([kept_entry, removed_entry], output_filename)
+
+    html = output_filename.read_text(encoding="utf-8")
+    assert html.index("removed-left.jpg") < html.index("kept-left.jpg")
+    assert '<p class="filename-mismatch">Right removed</p>' in html
+    assert "<p>Kept both</p>" in html
 
 
 def test_dedupe_permanently_deletes_when_recycle_bin_is_unavailable(

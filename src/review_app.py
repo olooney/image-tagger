@@ -1,4 +1,5 @@
 import html
+import logging
 import os
 import shutil
 import socket
@@ -13,7 +14,7 @@ from urllib.parse import quote
 import jinja2
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 import image_tagger as it
 from stackmap import StackMap
@@ -27,6 +28,7 @@ template_environment = jinja2.Environment(
 page_template = template_environment.get_template("review.html")
 card_template = template_environment.get_template("review_card.html")
 app = FastAPI(title="Image Metadata Review")
+LOGGER: logging.Logger = logging.getLogger(__name__)
 CATEGORY_OPTIONS: list[str] = [
     "ai",
     "art",
@@ -123,10 +125,10 @@ def current_image_path(row: pd.Series[Any]) -> Path | None:
     original_path = Path(row["original_filepath"])
     clean_filename = str(row.get("clean_filename", "")).strip()
     clean_path = original_path.with_name(clean_filename) if clean_filename else None
-    if clean_path is not None and clean_path.is_file():
-        return clean_path
     if original_path.is_file():
         return original_path
+    if clean_path is not None and clean_path.is_file():
+        return clean_path
     return None
 
 
@@ -327,25 +329,29 @@ async def home() -> str:
 async def update_row(row_id: int, request: Request) -> str:
     """Update one one-based metadata row and return the refreshed card."""
     metadata_path = review_metadata_path()
-    form = await request.form()
-    write_metadata_row(
-        metadata_path,
-        row_id,
-        {
-            "category": str(form.get("category", "")),
-            "genre": str(form.get("genre", "")),
-            "clean_filename": str(form.get("clean_filename", "")),
-            "tags": str(form.get("tags", "")),
-            "description": str(form.get("description", "")),
-        },
-    )
-    item = next(item for item in review_items(metadata_path) if item["row_id"] == row_id)
-    return render_card(
-        item,
-        review_category_options(metadata_path),
-        review_genre_options(metadata_path),
-        saved=True,
-    )
+    try:
+        form = await request.form()
+        write_metadata_row(
+            metadata_path,
+            row_id,
+            {
+                "category": str(form.get("category", "")),
+                "genre": str(form.get("genre", "")),
+                "clean_filename": str(form.get("clean_filename", "")),
+                "tags": str(form.get("tags", "")),
+                "description": str(form.get("description", "")),
+            },
+        )
+        item = next(item for item in review_items(metadata_path) if item["row_id"] == row_id)
+        return render_card(
+            item,
+            review_category_options(metadata_path),
+            review_genre_options(metadata_path),
+            saved=True,
+        )
+    except Exception as error:
+        LOGGER.exception("Failed to save review row %s.", row_id)
+        return PlainTextResponse(f"Could not save: {error}", status_code=500)
 
 
 @app.delete("/row/{row_id}", response_class=HTMLResponse)

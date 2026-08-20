@@ -119,6 +119,7 @@ class DedupeReviewEntry:
     judgement_text: str | None
     action: str
     duplicate_side: Literal["left", "right"]
+    is_removal: bool = False
 
 
 class ImageComparisonMethod(Protocol):
@@ -133,6 +134,14 @@ class ImageComparisonMethod(Protocol):
         verbose: int = 1,
     ) -> list[ImageSimilarity]:
         """Return scored image pairs."""
+        ...
+
+
+class ImageEmbedder(Protocol):
+    """Embed PIL image batches as normalized vectors."""
+
+    def embed_images(self, images: list[Image.Image]) -> np.ndarray:
+        """Return one vector for each input image."""
         ...
 
 
@@ -180,6 +189,8 @@ csv_columns: list[str] = [
     "description",
 ]
 DEDUPE_REVIEW_FILENAME: Path = Path("dedupe_review.html")
+DEDUPE_EMBEDDINGS_FILENAME: Path = Path("vectors.npz")
+EMBEDDING_CACHE_VERSION: int = 1
 
 
 class VisionModelProvider(Enum):
@@ -481,22 +492,42 @@ def base64_encode_image(image: Image.Image | Pathish) -> str:
 class ClipImageComparisonMethod:
     """Compare images with normalized CLIP image embeddings."""
 
-    def __init__(self, model: str = CLIP_MODEL) -> None:
+    def __init__(
+        self,
+        model: str = CLIP_MODEL,
+        cache_filename: Pathish | None = None,
+    ) -> None:
         """Create a CLIP comparison method."""
+        self.model = model
+        self.cache_filename = cache_filename
+        self.torch: Any | None = None
+        self.processor: Any | None = None
+        self.client: Any | None = None
+        self.device: str | None = None
+
+    def _load_client(self) -> None:
+        """Load CLIP only when an uncached image needs embedding."""
+        if self.client is not None:
+            return
         import torch
         from transformers import CLIPModel, CLIPProcessor
 
-        self.model = model
         self.torch = torch
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         with suppress_transformers_progress():
-            self.processor: Any = CLIPProcessor.from_pretrained(self.model)
+            self.processor = CLIPProcessor.from_pretrained(self.model)
             clip_client: Any = CLIPModel.from_pretrained(self.model)
-        self.client = clip_client.to(self.device)
-        self.client.eval()
+        client = clip_client.to(self.device)
+        client.eval()
+        self.client = client
 
     def embed_images(self, images: list[Image.Image]) -> np.ndarray:
         """Embed PIL images as normalized CLIP vectors."""
+        self._load_client()
+        assert self.client is not None
+        assert self.device is not None
+        assert self.processor is not None
+        assert self.torch is not None
         inputs = self.processor(
             images=[image.convert("RGB") for image in images],
             return_tensors="pt",
@@ -524,6 +555,8 @@ class ClipImageComparisonMethod:
             clip_adapter=self,
             batch_size=batch_size,
             verbose=verbose,
+            cache_filename=self.cache_filename,
+            cache_key=self.model,
         )
         if right_images is None:
             similarity_matrix = left_vectors @ left_vectors.T
@@ -542,6 +575,8 @@ class ClipImageComparisonMethod:
             clip_adapter=self,
             batch_size=batch_size,
             verbose=verbose,
+            cache_filename=self.cache_filename,
+            cache_key=self.model,
         )
         similarity_matrix = left_vectors @ right_vectors.T
         similarities: list[ImageSimilarity] = []
@@ -561,30 +596,125 @@ class ClipImageComparisonMethod:
 
 def embed_image_paths(
     image_paths: list[Path],
-    clip_adapter: ClipImageComparisonMethod | None = None,
+    clip_adapter: ImageEmbedder | None = None,
     batch_size: int = 32,
     verbose: int = 1,
+    cache_filename: Pathish | None = None,
+    cache_key: str | None = None,
 ) -> np.ndarray:
-    """Embed image paths as normalized CLIP vectors."""
+    """Embed image paths as normalized CLIP vectors, reusing a cache when given."""
     clip = clip_adapter or ClipImageComparisonMethod()
-    vectors: list[np.ndarray] = []
+    cache_path = Path(cache_filename) if cache_filename is not None else None
+    cache_entries = _load_embedding_cache(cache_path, cache_key)
+    image_metadata = {
+        path: (str(path.resolve()), path.stat().st_size, path.stat().st_mtime_ns)
+        for path in image_paths
+    }
+    vectors_by_path: dict[Path, np.ndarray] = {}
+    uncached_paths: list[Path] = []
 
-    for start in range(0, len(image_paths), batch_size):
-        batch_paths = image_paths[start : start + batch_size]
+    for path, (cache_path_key, size, mtime_ns) in image_metadata.items():
+        cached_entry = cache_entries.get(cache_path_key)
+        if cached_entry is None:
+            uncached_paths.append(path)
+            continue
+        cached_size, cached_mtime_ns, vector = cached_entry
+        if (cached_size, cached_mtime_ns) == (size, mtime_ns):
+            vectors_by_path[path] = vector
+        else:
+            uncached_paths.append(path)
+
+    for start in range(0, len(uncached_paths), batch_size):
+        batch_paths = uncached_paths[start : start + batch_size]
         batch_images: list[Image.Image] = []
 
         for path in batch_paths:
             with Image.open(path) as image:
                 batch_images.append(image.convert("RGB").copy())
 
-        vectors.append(clip.embed_images(batch_images))
+        batch_vectors = clip.embed_images(batch_images)
+        for path, vector in zip(batch_paths, batch_vectors, strict=True):
+            vectors_by_path[path] = vector
+            cache_path_key, size, mtime_ns = image_metadata[path]
+            cache_entries[cache_path_key] = (size, mtime_ns, vector)
         if verbose >= 2:
-            complete_count = min(start + batch_size, len(image_paths))
-            print(f"embedded {complete_count}/{len(image_paths)}")
+            complete_count = min(start + batch_size, len(uncached_paths))
+            print(f"embedded {complete_count}/{len(uncached_paths)}")
 
-    if not vectors:
+    if cache_path is not None and uncached_paths:
+        _save_embedding_cache(cache_path, cache_key, cache_entries)
+
+    if not image_paths:
         return np.empty((0, 0), dtype=np.float64)
-    return np.vstack(vectors)
+    return np.vstack([vectors_by_path[path] for path in image_paths])
+
+
+def _load_embedding_cache(
+    cache_path: Path | None,
+    cache_key: str | None,
+) -> dict[str, tuple[int, int, np.ndarray]]:
+    """Load compatible embedding cache entries without disrupting dedupe."""
+    if cache_path is None or not cache_path.is_file():
+        return {}
+    try:
+        with np.load(cache_path, allow_pickle=False) as cache:
+            if (
+                int(cache["version"][0]) != EMBEDDING_CACHE_VERSION
+                or str(cache["cache_key"][0]) != (cache_key or "")
+            ):
+                return {}
+            paths = cache["paths"]
+            sizes = cache["sizes"]
+            mtimes_ns = cache["mtimes_ns"]
+            vectors = cache["vectors"]
+            if (
+                paths.ndim != 1
+                or sizes.shape != paths.shape
+                or mtimes_ns.shape != paths.shape
+                or vectors.ndim != 2
+                or len(vectors) != len(paths)
+            ):
+                return {}
+            return {
+                str(path): (int(size), int(mtime_ns), vector)
+                for path, size, mtime_ns, vector in zip(
+                    paths,
+                    sizes,
+                    mtimes_ns,
+                    vectors,
+                    strict=True,
+                )
+            }
+    except (EOFError, KeyError, OSError, ValueError):
+        return {}
+
+
+def _save_embedding_cache(
+    cache_path: Path,
+    cache_key: str | None,
+    entries: Mapping[str, tuple[int, int, np.ndarray]],
+) -> None:
+    """Atomically save compressed embedding vectors and their file fingerprints."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered_entries = sorted(entries.items())
+    paths = np.array([path for path, _ in ordered_entries])
+    sizes = np.array([entry[0] for _, entry in ordered_entries], dtype=np.int64)
+    mtimes_ns = np.array([entry[1] for _, entry in ordered_entries], dtype=np.int64)
+    vectors = np.vstack([entry[2] for _, entry in ordered_entries])
+    temporary_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp.npz")
+    try:
+        np.savez_compressed(
+            temporary_path,
+            version=np.array([EMBEDDING_CACHE_VERSION]),
+            cache_key=np.array([cache_key or ""]),
+            paths=paths,
+            sizes=sizes,
+            mtimes_ns=mtimes_ns,
+            vectors=vectors,
+        )
+        temporary_path.replace(cache_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def image_dimensions(image_path: Pathish) -> tuple[int, int]:
@@ -996,6 +1126,13 @@ def dedupe_images(
     if verbose == 1:
         print(f"working in {quote_display_path(directory_path)}")
     rejected_llm_matches: list[ImageDuplicateMatch] = []
+    comparison_method = (
+        ClipImageComparisonMethod(
+            cache_filename=directory_path / DEDUPE_EMBEDDINGS_FILENAME,
+        )
+        if len(image_paths) >= 2
+        else None
+    )
     matches = dedupe_image_matches(
         image_paths,
         automatic_threshold=automatic_threshold,
@@ -1004,13 +1141,14 @@ def dedupe_images(
         batch_size=batch_size,
         verbose=verbose,
         rejected_llm_matches=rejected_llm_matches,
+        comparison_method=comparison_method,
     )
 
     removed_paths: set[Path] = set()
     review_entries = [
         _dedupe_review_entry(
             match,
-            action="Both images were kept after LLM adjudication.",
+            action="Kept both",
         )
         for match in rejected_llm_matches
     ]
@@ -1024,6 +1162,7 @@ def dedupe_images(
             review_entry.duplicate_side,
             dry_run=dry_run,
         )
+        removed = False
         if verbose >= 1:
             print(
                 display_file_operation(
@@ -1042,6 +1181,7 @@ def dedupe_images(
                 except TrashPermissionError:
                     duplicate.unlink()
             removed_paths.add(duplicate)
+            removed = not dry_run
             if verbose >= 1:
                 print("success!")
         except Exception:
@@ -1055,7 +1195,13 @@ def dedupe_images(
             else:
                 print(f"error removing {os.fspath(duplicate)!r}!")
             traceback.print_exc()
-        review_entries.append(replace(review_entry, action=action))
+        review_entries.append(
+            replace(
+                review_entry,
+                action=action,
+                is_removal=removed,
+            )
+        )
 
     review_filename = directory_path / DEDUPE_REVIEW_FILENAME
     generate_dedupe_review(review_entries, review_filename)
@@ -1098,10 +1244,10 @@ def _duplicate_removal_action(
     """Describe the review side selected for duplicate removal."""
     side = duplicate_side.capitalize()
     if not removed:
-        return f"{side} image could not be removed as a duplicate."
+        return f"{side} not removed"
     if dry_run:
-        return f"{side} image would be removed as a duplicate."
-    return f"{side} image was removed as a duplicate."
+        return f"{side} would remove"
+    return f"{side} removed"
 
 
 def _thumbnail_data_url(image_path: Pathish) -> str | None:
@@ -1127,7 +1273,8 @@ def generate_dedupe_review(
     )
     template = jinja2.Environment(autoescape=True).from_string(template_text)
     output_path = Path(output_filename)
-    output_path.write_text(template.render(entries=entries), encoding="utf-8")
+    sorted_entries = sorted(entries, key=lambda entry: not entry.is_removal)
+    output_path.write_text(template.render(entries=sorted_entries), encoding="utf-8")
     return output_path
 
 

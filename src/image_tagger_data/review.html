@@ -8,6 +8,11 @@
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <style>
         .save-status { min-height: 1.5rem; color: #2f6f3e; }
+        .filename-mismatch {
+            padding: 0.125rem 0.25rem;
+            background-color: #ffeb00;
+            color: #1a1a1a;
+        }
         .btn-primary:disabled {
             border-color: #999;
             background-color: #bbb;
@@ -46,8 +51,24 @@
 
         document.addEventListener('input', markDirty);
         document.addEventListener('change', markDirty);
+        document.addEventListener('click', (event) => {
+            const acceptButton = event.target.closest('[data-accept-filename]');
+            if (!acceptButton) {
+                return;
+            }
+            const form = acceptButton.closest('form');
+            const cleanFilename = form.querySelector('[name="clean_filename"]');
+            cleanFilename.value = acceptButton.dataset.acceptFilename;
+            form.requestSubmit();
+        });
         document.addEventListener('DOMContentLoaded', updateReviewState);
         document.addEventListener('htmx:afterSwap', updateReviewState);
+        document.addEventListener('htmx:responseError', (event) => {
+            if (event.detail.requestConfig.path.startsWith('/row/')) {
+                const message = event.detail.xhr.responseText.trim() || 'Could not save changes.';
+                window.alert(message);
+            }
+        });
     </script>
 </head>
 <body>

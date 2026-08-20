@@ -211,6 +211,7 @@ def clean_uploads(args: argparse.Namespace) -> None:
         args.metadata_filename.with_suffix(f"{args.metadata_filename.suffix}.bak"),
         args.output_filename,
         args.directory / it.DEDUPE_REVIEW_FILENAME,
+        args.directory / it.DEDUPE_EMBEDDINGS_FILENAME,
     ]:
         if filename.exists():
             if args.dry_run:
@@ -288,7 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     dedupe_parser.add_argument(
         "--llm-threshold",
         type=float,
-        default=0.85,
+        default=0.9,
         help="CLIP score sent to the LLM for duplicate confirmation.",
     )
     dedupe_parser.add_argument(
