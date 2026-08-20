@@ -1377,9 +1377,12 @@ def dedupe_images(
         )
 
     review_filename = directory_path / DEDUPE_REVIEW_FILENAME
-    generate_dedupe_review(review_entries, review_filename)
-    if verbose >= 1:
-        print(f"wrote {quote_display_path(review_filename)}")
+    if review_entries:
+        generate_dedupe_review(review_entries, review_filename)
+        if verbose >= 1:
+            print(f"wrote {quote_display_path(review_filename)}")
+    else:
+        review_filename.unlink(missing_ok=True)
 
     return matches
 

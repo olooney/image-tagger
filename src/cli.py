@@ -110,8 +110,9 @@ def dedupe_uploads(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         provider=args.provider,
     )
-    if args.preview:
-        preview(args.directory / it.DEDUPE_REVIEW_FILENAME)
+    review_filename = args.directory / it.DEDUPE_REVIEW_FILENAME
+    if args.preview and review_filename.is_file():
+        preview(review_filename)
 
 
 def prune_uploads(args: argparse.Namespace) -> None:

@@ -2237,6 +2237,27 @@ def test_generate_dedupe_review_sorts_and_highlights_actual_removals(
     assert "<p>Kept both</p>" in html
 
 
+def test_dedupe_cli_skips_preview_without_decisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_cli: Callable[..., str],
+) -> None:
+    """Remove stale reports and avoid previewing when no decisions remain."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    Image.new("RGB", (4, 4)).save(uploads_dir / "image.jpg")
+    review_filename = uploads_dir / it.DEDUPE_REVIEW_FILENAME
+    review_filename.write_text("stale review", encoding="utf-8")
+    monkeypatch.setattr(it, "dedupe_new_image_matches", lambda *args, **kwargs: [])
+    previewed_paths: list[Path] = []
+    monkeypatch.setattr(cli, "preview", previewed_paths.append)
+
+    run_cli("dedupe", str(uploads_dir))
+
+    assert not review_filename.exists()
+    assert previewed_paths == []
+
+
 def test_dedupe_permanently_deletes_when_recycle_bin_is_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
