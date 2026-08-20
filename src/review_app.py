@@ -29,19 +29,6 @@ page_template = template_environment.get_template("review.html")
 card_template = template_environment.get_template("review_card.html")
 app = FastAPI(title="Image Metadata Review")
 LOGGER: logging.Logger = logging.getLogger(__name__)
-CATEGORY_OPTIONS: list[str] = [
-    "ai",
-    "art",
-    "books",
-    "comics",
-    "diagrams",
-    "horror",
-    "hygge",
-    "memes",
-    "photography",
-    "speculative",
-    "vintage",
-]
 GENRE_OPTIONS: list[str] = [
     "sci-fi",
     "fantasy",
@@ -91,18 +78,9 @@ def first_available_port(start_port: int = 8001) -> int:
             return port
 
 
-def review_category_options(metadata_path: Path) -> list[str]:
-    """Return category options from the tagging prompt."""
-    if not metadata_path.is_file():
-        return []
-    metadata_df = pd.read_csv(metadata_path, keep_default_na=False)
-    categories = list(CATEGORY_OPTIONS)
-    if "category" in metadata_df:
-        for category in metadata_df["category"]:
-            category_value = str(category).strip()
-            if category_value and category_value not in categories:
-                categories.append(category_value)
-    return categories
+def review_category_options() -> list[str]:
+    """Return category options from the configured shelf map."""
+    return review_stackmap().categories
 
 
 def review_genre_options(metadata_path: Path) -> list[str]:
@@ -281,7 +259,7 @@ def render_shelve_response(metadata_path: Path, output: str) -> str:
         genres = []
         items: list[dict[str, Any]] = []
     else:
-        categories = review_category_options(metadata_path)
+        categories = review_category_options()
         genres = review_genre_options(metadata_path)
         items = review_items(metadata_path)
     report = f'<pre class="shelve-report">{html.escape(output)}</pre>'
@@ -313,7 +291,7 @@ async def image_file(image_path: str) -> FileResponse:
 async def home() -> str:
     """Render the metadata review page."""
     metadata_path = review_metadata_path()
-    categories = review_category_options(metadata_path)
+    categories = review_category_options()
     genres = review_genre_options(metadata_path)
     items = review_items(metadata_path)
     return page_template.render(
@@ -345,7 +323,7 @@ async def update_row(row_id: int, request: Request) -> str:
         item = next(item for item in review_items(metadata_path) if item["row_id"] == row_id)
         return render_card(
             item,
-            review_category_options(metadata_path),
+            review_category_options(),
             review_genre_options(metadata_path),
             saved=True,
         )

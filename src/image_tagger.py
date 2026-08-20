@@ -1,5 +1,6 @@
 import base64
 import csv
+import fnmatch
 import hashlib
 import json
 import os
@@ -127,7 +128,8 @@ class EmbeddingCache:
     """Persisted embeddings and image paths confirmed by dedupe."""
 
     entries: dict[str, tuple[int, int, np.ndarray]]
-    processed_paths: set[str]
+    reviewed_thresholds: dict[str, tuple[float, float]]
+    needs_upgrade: bool = False
 
 
 class ImageComparisonMethod(Protocol):
@@ -177,6 +179,8 @@ SAME_IMAGE_PROMPT_TEMPLATE: str = (
     .read_text()
 )
 CLIP_MODEL: str = "openai/clip-vit-base-patch32"
+DEFAULT_AUTOMATIC_THRESHOLD: float = 0.99
+DEFAULT_LLM_THRESHOLD: float = 0.85
 
 csv_columns: list[str] = [
     "timestamp",
@@ -198,7 +202,7 @@ csv_columns: list[str] = [
 ]
 DEDUPE_REVIEW_FILENAME: Path = Path("dedupe_review.html")
 DEDUPE_EMBEDDINGS_FILENAME: Path = Path("vectors.npz")
-EMBEDDING_CACHE_VERSION: int = 2
+EMBEDDING_CACHE_VERSION: int = 3
 
 
 class VisionModelProvider(Enum):
@@ -664,14 +668,14 @@ def _load_embedding_cache(
 ) -> EmbeddingCache:
     """Load compatible embedding cache entries without disrupting dedupe."""
     if cache_path is None or not cache_path.is_file():
-        return EmbeddingCache(entries={}, processed_paths=set())
+        return EmbeddingCache(entries={}, reviewed_thresholds={})
     try:
         with np.load(cache_path, allow_pickle=False) as cache:
             version = int(cache["version"][0])
-            if version not in {1, EMBEDDING_CACHE_VERSION} or str(
+            if version not in {1, 2, EMBEDDING_CACHE_VERSION} or str(
                 cache["cache_key"][0]
             ) != (cache_key or ""):
-                return EmbeddingCache(entries={}, processed_paths=set())
+                return EmbeddingCache(entries={}, reviewed_thresholds={})
             paths = cache["paths"]
             sizes = cache["sizes"]
             mtimes_ns = cache["mtimes_ns"]
@@ -683,7 +687,7 @@ def _load_embedding_cache(
                 or vectors.ndim != 2
                 or len(vectors) != len(paths)
             ):
-                return EmbeddingCache(entries={}, processed_paths=set())
+                return EmbeddingCache(entries={}, reviewed_thresholds={})
             entries = {
                 str(path): (int(size), int(mtime_ns), vector)
                 for path, size, mtime_ns, vector in zip(
@@ -694,17 +698,44 @@ def _load_embedding_cache(
                     strict=True,
                 )
             }
-            processed_paths = (
-                {str(path) for path in cache["processed_paths"]}
-                if version == EMBEDDING_CACHE_VERSION
-                else set(entries)
-            )
+            if version == EMBEDDING_CACHE_VERSION:
+                reviewed_paths = cache["reviewed_paths"]
+                automatic_thresholds = cache["reviewed_automatic_thresholds"]
+                llm_thresholds = cache["reviewed_llm_thresholds"]
+                if (
+                    reviewed_paths.ndim != 1
+                    or automatic_thresholds.shape != reviewed_paths.shape
+                    or llm_thresholds.shape != reviewed_paths.shape
+                ):
+                    return EmbeddingCache(entries={}, reviewed_thresholds={})
+                reviewed_thresholds = {
+                    str(path): (float(automatic_threshold), float(llm_threshold))
+                    for path, automatic_threshold, llm_threshold in zip(
+                        reviewed_paths,
+                        automatic_thresholds,
+                        llm_thresholds,
+                        strict=True,
+                    )
+                    if str(path) in entries
+                }
+            else:
+                reviewed_paths = (
+                    {str(path) for path in cache["processed_paths"]}
+                    if version == 2
+                    else set(entries)
+                )
+                reviewed_thresholds = {
+                    path: (DEFAULT_AUTOMATIC_THRESHOLD, DEFAULT_LLM_THRESHOLD)
+                    for path in reviewed_paths
+                    if path in entries
+                }
             return EmbeddingCache(
                 entries=entries,
-                processed_paths=processed_paths,
+                reviewed_thresholds=reviewed_thresholds,
+                needs_upgrade=version != EMBEDDING_CACHE_VERSION,
             )
     except (EOFError, KeyError, OSError, ValueError):
-        return EmbeddingCache(entries={}, processed_paths=set())
+        return EmbeddingCache(entries={}, reviewed_thresholds={})
 
 
 def _save_embedding_cache(
@@ -719,6 +750,11 @@ def _save_embedding_cache(
     sizes = np.array([entry[0] for _, entry in ordered_entries], dtype=np.int64)
     mtimes_ns = np.array([entry[1] for _, entry in ordered_entries], dtype=np.int64)
     vectors = np.vstack([entry[2] for _, entry in ordered_entries])
+    reviewed_items = sorted(
+        (path, thresholds)
+        for path, thresholds in cache.reviewed_thresholds.items()
+        if path in cache.entries
+    )
     temporary_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp.npz")
     try:
         np.savez_compressed(
@@ -729,41 +765,59 @@ def _save_embedding_cache(
             sizes=sizes,
             mtimes_ns=mtimes_ns,
             vectors=vectors,
-            processed_paths=np.array(sorted(cache.processed_paths)),
+            reviewed_paths=np.array([path for path, _ in reviewed_items]),
+            reviewed_automatic_thresholds=np.array(
+                [thresholds[0] for _, thresholds in reviewed_items],
+                dtype=np.float64,
+            ),
+            reviewed_llm_thresholds=np.array(
+                [thresholds[1] for _, thresholds in reviewed_items],
+                dtype=np.float64,
+            ),
         )
         temporary_path.replace(cache_path)
+        cache.needs_upgrade = False
     finally:
         temporary_path.unlink(missing_ok=True)
 
 
-def _processed_cached_image_paths(
+def _reviewed_cached_image_paths(
     image_paths: Iterable[Path],
     cache_path: Path,
     cache_key: str,
+    automatic_threshold: float,
+    llm_threshold: float,
 ) -> set[Path]:
-    """Return current images confirmed by a prior dedupe run."""
+    """Return current images reviewed at compatible dedupe thresholds."""
     cache = _load_embedding_cache(cache_path, cache_key)
-    processed_paths: set[Path] = set()
+    reviewed_paths: set[Path] = set()
     for path in image_paths:
         path_key = str(path.resolve())
         cached_entry = cache.entries.get(path_key)
-        if cached_entry is None or path_key not in cache.processed_paths:
+        reviewed_thresholds = cache.reviewed_thresholds.get(path_key)
+        if cached_entry is None or reviewed_thresholds is None:
             continue
         size, mtime_ns, _ = cached_entry
         stat = path.stat()
-        if (size, mtime_ns) == (stat.st_size, stat.st_mtime_ns):
-            processed_paths.add(path)
-    return processed_paths
+        if (
+            (size, mtime_ns) == (stat.st_size, stat.st_mtime_ns)
+            and automatic_threshold >= reviewed_thresholds[0]
+            and llm_threshold >= reviewed_thresholds[1]
+        ):
+            reviewed_paths.add(path)
+    return reviewed_paths
 
 
 def _mark_images_deduped(
     image_paths: Iterable[Path],
     cache_path: Path,
     cache_key: str,
+    automatic_threshold: float,
+    llm_threshold: float,
 ) -> None:
-    """Mark unchanged cached images as successfully deduped."""
+    """Record dedupe thresholds for unchanged cached images."""
     cache = _load_embedding_cache(cache_path, cache_key)
-    changed = False
+    changed = cache.needs_upgrade
     for path in image_paths:
         path_key = str(path.resolve())
         cached_entry = cache.entries.get(path_key)
@@ -771,11 +825,12 @@ def _mark_images_deduped(
             continue
         size, mtime_ns, _ = cached_entry
         stat = path.stat()
+        thresholds = (automatic_threshold, llm_threshold)
         if (
             (size, mtime_ns) == (stat.st_size, stat.st_mtime_ns)
-            and path_key not in cache.processed_paths
+            and cache.reviewed_thresholds.get(path_key) != thresholds
         ):
-            cache.processed_paths.add(path_key)
+            cache.reviewed_thresholds[path_key] = thresholds
             changed = True
     if changed:
         _save_embedding_cache(cache_path, cache_key, cache)
@@ -795,7 +850,11 @@ def prune_embedding_cache(cache_path: Pathish) -> int:
     removed_count = len(cache.entries) - len(live_entries)
     if removed_count:
         cache.entries = live_entries
-        cache.processed_paths.intersection_update(live_entries)
+        cache.reviewed_thresholds = {
+            path_key: thresholds
+            for path_key, thresholds in cache.reviewed_thresholds.items()
+            if path_key in live_entries
+        }
         _save_embedding_cache(path, CLIP_MODEL, cache)
     return removed_count
 
@@ -870,7 +929,7 @@ def dedupe_image_matches(
     right_images: Iterable[Pathish] | None = None,
     *,
     automatic_threshold: float = 0.99,
-    llm_threshold: float = 0.9,
+    llm_threshold: float = 0.85,
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
     batch_size: int = 32,
     comparison_method: ImageComparisonMethod | None = None,
@@ -909,7 +968,7 @@ def dedupe_new_image_matches(
     processed_images: Iterable[Pathish],
     *,
     automatic_threshold: float = 0.99,
-    llm_threshold: float = 0.9,
+    llm_threshold: float = 0.85,
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
     batch_size: int = 32,
     comparison_method: ImageComparisonMethod | None = None,
@@ -1269,8 +1328,9 @@ def find_images(
 def dedupe_images(
     directory: Pathish,
     *,
-    automatic_threshold: float = 0.99,
-    llm_threshold: float = 0.9,
+    automatic_threshold: float = DEFAULT_AUTOMATIC_THRESHOLD,
+    llm_threshold: float = DEFAULT_LLM_THRESHOLD,
+    filename_glob: str | None = None,
     verbose: int = 1,
     dry_run: bool = False,
     provider: VisionModelProvider = VisionModelProvider.OPENAI,
@@ -1282,12 +1342,30 @@ def dedupe_images(
     if verbose == 1:
         print(f"working in {quote_display_path(directory_path)}")
     cache_filename = directory_path / DEDUPE_EMBEDDINGS_FILENAME
-    processed_image_paths = _processed_cached_image_paths(
-        image_paths,
-        cache_filename,
-        CLIP_MODEL,
-    )
-    new_image_paths = [path for path in image_paths if path not in processed_image_paths]
+    if filename_glob is None:
+        processed_image_paths = _reviewed_cached_image_paths(
+            image_paths,
+            cache_filename,
+            CLIP_MODEL,
+            automatic_threshold,
+            llm_threshold,
+        )
+        new_image_paths = [
+            path
+            for path in image_paths
+            if path not in processed_image_paths
+        ]
+    else:
+        new_image_paths = [
+            path
+            for path in image_paths
+            if fnmatch.fnmatch(path.name, filename_glob)
+        ]
+        processed_image_paths = [
+            path
+            for path in image_paths
+            if path not in new_image_paths
+        ]
     rejected_llm_matches: list[ImageDuplicateMatch] = []
     comparison_method = (
         ClipImageComparisonMethod(
@@ -1369,11 +1447,13 @@ def dedupe_images(
             )
         )
 
-    if not dry_run and not removal_failed:
+    if not dry_run and not removal_failed and filename_glob is None:
         _mark_images_deduped(
             (path for path in image_paths if path.exists()),
             cache_filename,
             CLIP_MODEL,
+            automatic_threshold,
+            llm_threshold,
         )
 
     review_filename = directory_path / DEDUPE_REVIEW_FILENAME

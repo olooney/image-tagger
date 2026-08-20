@@ -268,6 +268,99 @@ def test_embed_image_paths_reuses_cached_vectors_for_unchanged_images(
     assert np.array_equal(first_vectors, second_vectors)
 
 
+def test_reviewed_cached_images_require_compatible_thresholds(
+    tmp_path: Path,
+) -> None:
+    """Reprocess images when either requested dedupe threshold is lower."""
+    image_path = tmp_path / "image.jpg"
+    Image.new("RGB", (4, 4)).save(image_path)
+    path_key = str(image_path.resolve())
+    cache_filename = tmp_path / "vectors.npz"
+    it._save_embedding_cache(
+        cache_filename,
+        it.CLIP_MODEL,
+        it.EmbeddingCache(
+            entries={
+                path_key: (
+                    image_path.stat().st_size,
+                    image_path.stat().st_mtime_ns,
+                    np.ones(3, dtype=np.float64),
+                )
+            },
+            reviewed_thresholds={path_key: (0.99, 0.9)},
+        ),
+    )
+
+    assert it._reviewed_cached_image_paths(
+        [image_path],
+        cache_filename,
+        it.CLIP_MODEL,
+        0.99,
+        0.9,
+    ) == {image_path}
+    assert it._reviewed_cached_image_paths(
+        [image_path],
+        cache_filename,
+        it.CLIP_MODEL,
+        0.98,
+        0.9,
+    ) == set()
+    assert it._reviewed_cached_image_paths(
+        [image_path],
+        cache_filename,
+        it.CLIP_MODEL,
+        0.99,
+        0.85,
+    ) == set()
+    assert it._reviewed_cached_image_paths(
+        [image_path],
+        cache_filename,
+        it.CLIP_MODEL,
+        0.995,
+        0.95,
+    ) == {image_path}
+
+
+def test_legacy_embedding_cache_uses_default_review_thresholds(
+    tmp_path: Path,
+) -> None:
+    """Treat version-one vector caches as reviewed with default thresholds."""
+    image_path = tmp_path / "image.jpg"
+    Image.new("RGB", (4, 4)).save(image_path)
+    path_key = str(image_path.resolve())
+    cache_filename = tmp_path / "vectors.npz"
+    np.savez_compressed(
+        cache_filename,
+        version=np.array([1]),
+        cache_key=np.array([it.CLIP_MODEL]),
+        paths=np.array([path_key]),
+        sizes=np.array([image_path.stat().st_size], dtype=np.int64),
+        mtimes_ns=np.array([image_path.stat().st_mtime_ns], dtype=np.int64),
+        vectors=np.ones((1, 3), dtype=np.float64),
+    )
+
+    cache = it._load_embedding_cache(cache_filename, it.CLIP_MODEL)
+
+    assert cache.reviewed_thresholds == {
+        path_key: (
+            it.DEFAULT_AUTOMATIC_THRESHOLD,
+            it.DEFAULT_LLM_THRESHOLD,
+        )
+    }
+    assert cache.needs_upgrade
+
+    it._mark_images_deduped(
+        [image_path],
+        cache_filename,
+        it.CLIP_MODEL,
+        it.DEFAULT_AUTOMATIC_THRESHOLD,
+        it.DEFAULT_LLM_THRESHOLD,
+    )
+
+    with np.load(cache_filename, allow_pickle=False) as upgraded_cache:
+        assert upgraded_cache["version"][0] == it.EMBEDDING_CACHE_VERSION
+
+
 def test_dedupe_new_image_matches_skips_processed_image_pairs(
     tmp_path: Path,
 ) -> None:
@@ -312,7 +405,13 @@ def test_dedupe_images_skips_model_when_all_images_are_processed(
         it.CLIP_MODEL,
         it.EmbeddingCache(
             entries=cache_entries,
-            processed_paths=set(cache_entries),
+            reviewed_thresholds={
+                path: (
+                    it.DEFAULT_AUTOMATIC_THRESHOLD,
+                    it.DEFAULT_LLM_THRESHOLD,
+                )
+                for path in cache_entries
+            },
         ),
     )
 
@@ -323,6 +422,63 @@ def test_dedupe_images_skips_model_when_all_images_are_processed(
     monkeypatch.setattr(it, "ClipImageComparisonMethod", unexpected_clip_model)
 
     assert it.dedupe_images(tmp_path, verbose=0) == []
+
+
+def test_dedupe_filename_glob_limits_pairs_without_marking_reviews(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compare only pairs touching a glob match without changing review records."""
+    selected_paths = [
+        tmp_path / "selected-first.jpg",
+        tmp_path / "selected-second.jpg",
+    ]
+    other_path = tmp_path / "other.jpg"
+    image_paths = [*selected_paths, other_path]
+    for path in image_paths:
+        Image.new("RGB", (4, 4)).save(path)
+    cache_entries = {
+        str(path.resolve()): (
+            path.stat().st_size,
+            path.stat().st_mtime_ns,
+            np.ones(3, dtype=np.float64),
+        )
+        for path in image_paths
+    }
+    original_reviews = {
+        path_key: (0.99, 0.9)
+        for path_key in cache_entries
+    }
+    cache_filename = tmp_path / it.DEDUPE_EMBEDDINGS_FILENAME
+    it._save_embedding_cache(
+        cache_filename,
+        it.CLIP_MODEL,
+        it.EmbeddingCache(
+            entries=cache_entries,
+            reviewed_thresholds=original_reviews,
+        ),
+    )
+    comparison_method = FakeImageComparisonMethod({})
+    monkeypatch.setattr(
+        it,
+        "ClipImageComparisonMethod",
+        lambda **kwargs: comparison_method,
+    )
+
+    assert it.dedupe_images(
+        tmp_path,
+        automatic_threshold=0.98,
+        llm_threshold=0.85,
+        filename_glob="selected-*.jpg",
+        verbose=0,
+    ) == []
+
+    assert comparison_method.calls == [
+        (selected_paths, None, 32, 0),
+        (selected_paths, [other_path], 32, 0),
+    ]
+    cache = it._load_embedding_cache(cache_filename, it.CLIP_MODEL)
+    assert cache.reviewed_thresholds == original_reviews
 
 
 def test_dedupe_new_image_matches_creates_one_llm_client_lazily(
@@ -944,6 +1100,40 @@ def test_review_app_updates_one_based_metadata_row(
     assert (tmp_path / "memes" / "final_name.jpg").exists()
 
 
+def test_review_app_categories_follow_configured_stackmap(
+    tmp_path: Path,
+) -> None:
+    """Render category options only from the active stackmap aliases."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    image_filename = uploads_dir / "sample.jpg"
+    Image.new("RGB", (8, 8), "red").save(image_filename)
+    metadata_filename = uploads_dir / "image_metadata.csv"
+    metadata_filename.write_text(
+        "status,original_filepath,clean_filename,category,genre,tags,description\n"
+        f"ok,{image_filename},sample.jpg,legacy,documentary,reference,Sample image.\n",
+        encoding="utf-8",
+    )
+    stackmap = StackMap(
+        filename=tmp_path / ".stackmap",
+        shelves={
+            "default": uploads_dir,
+            "field_notes": tmp_path / "field_notes",
+            "portraits": tmp_path / "portraits",
+        },
+        shelf_descriptions={},
+    )
+    review_app.set_review_metadata(metadata_filename, stackmap)
+
+    response = TestClient(review_app.app).get("/")
+
+    assert response.status_code == 200
+    assert '<option value="field_notes">field_notes</option>' in response.text
+    assert '<option value="portraits">portraits</option>' in response.text
+    assert '<option value="photography">photography</option>' not in response.text
+    assert '<option value="legacy">legacy</option>' not in response.text
+
+
 def test_prune_cli_removes_rows_without_existing_images(
     tmp_path: Path,
     run_cli: Callable[..., str],
@@ -1013,7 +1203,13 @@ def test_prune_cli_removes_rows_without_existing_images(
         it.CLIP_MODEL,
         it.EmbeddingCache(
             entries=cache_entries,
-            processed_paths=set(cache_entries),
+            reviewed_thresholds={
+                path: (
+                    it.DEFAULT_AUTOMATIC_THRESHOLD,
+                    it.DEFAULT_LLM_THRESHOLD,
+                )
+                for path in cache_entries
+            },
         ),
     )
 
@@ -1026,7 +1222,12 @@ def test_prune_cli_removes_rows_without_existing_images(
     assert "Remove me." not in metadata_filename.read_text(encoding="utf-8")
     cache = it._load_embedding_cache(cache_filename, it.CLIP_MODEL)
     assert set(cache.entries) == {str(image_filename.resolve())}
-    assert cache.processed_paths == {str(image_filename.resolve())}
+    assert cache.reviewed_thresholds == {
+        str(image_filename.resolve()): (
+            it.DEFAULT_AUTOMATIC_THRESHOLD,
+            it.DEFAULT_LLM_THRESHOLD,
+        )
+    }
 
 
 def test_shelve_cli_moves_misplaced_images_from_directory_alias(
@@ -2329,6 +2530,7 @@ def test_dedupe_cli_passes_custom_thresholds_and_provider(
             "verbose": 2,
             "dry_run": True,
             "provider": "gemma",
+            "filename_glob": None,
         }
     ]
 

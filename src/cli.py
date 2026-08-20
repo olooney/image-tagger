@@ -109,6 +109,7 @@ def dedupe_uploads(args: argparse.Namespace) -> None:
         verbose=args.verbose,
         dry_run=args.dry_run,
         provider=args.provider,
+        filename_glob=args.filename,
     )
     review_filename = args.directory / it.DEDUPE_REVIEW_FILENAME
     if args.preview and review_filename.is_file():
@@ -286,14 +287,18 @@ def build_parser() -> argparse.ArgumentParser:
     dedupe_parser.add_argument(
         "--automatic-threshold",
         type=float,
-        default=0.99,
+        default=it.DEFAULT_AUTOMATIC_THRESHOLD,
         help="CLIP score accepted as duplicate without LLM confirmation.",
     )
     dedupe_parser.add_argument(
         "--llm-threshold",
         type=float,
-        default=0.9,
+        default=it.DEFAULT_LLM_THRESHOLD,
         help="CLIP score sent to the LLM for duplicate confirmation.",
+    )
+    dedupe_parser.add_argument(
+        "--filename",
+        help="Check only pairs where at least one filename matches this glob.",
     )
     dedupe_parser.add_argument(
         "--provider",
