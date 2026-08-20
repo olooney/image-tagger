@@ -88,6 +88,8 @@ click-to-open full-size overlay.
 
 `just report` prints image totals, metadata breakdowns, outstanding metadata and
 dedupe work, filename cleanup gaps, and the largest images in `DIRECTORY`.
+It shows images larger than 1 MB by default; use `--large-image-threshold` with
+values such as `500k` or `2 MB` to change that limit.
 
 Vision Models
 -------------

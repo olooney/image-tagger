@@ -35,6 +35,25 @@ def extensions_arg(value: str) -> list[str]:
     return extensions
 
 
+def file_size_arg(value: str) -> int:
+    """Parse a lenient decimal file size such as 1 MB or 500k."""
+    normalized_value = value.strip().lower().replace(",", "").replace("_", "")
+    match = re.fullmatch(
+        r"(\d+(?:\.\d*)?|\.\d+)\s*([kmgt]?)\s*(?:i?b(?:ytes?)?)?",
+        normalized_value,
+    )
+    if match is None:
+        raise argparse.ArgumentTypeError(
+            f"Invalid file size {value!r}; use a value such as 1 MB or 500k."
+        )
+    amount = float(match.group(1))
+    multipliers = {"": 1, "k": 1_000, "m": 1_000_000, "g": 1_000_000_000, "t": 1_000_000_000_000}
+    size = int(amount * multipliers[match.group(2)])
+    if size <= 0:
+        raise argparse.ArgumentTypeError("File size must be greater than zero.")
+    return size
+
+
 def convert_uploads(args: argparse.Namespace) -> None:
     """Run upload conversion steps."""
     directory = args.directory
@@ -203,7 +222,13 @@ def wall_uploads(args: argparse.Namespace) -> None:
 
 def report_uploads(args: argparse.Namespace) -> None:
     """Print an image collection report."""
-    print(it.report_images(args.directory, args.metadata_filename))
+    print(
+        it.report_images(
+            args.directory,
+            args.metadata_filename,
+            args.large_image_threshold,
+        )
+    )
 
 
 def review_uploads(args: argparse.Namespace) -> None:
@@ -408,6 +433,12 @@ def build_parser() -> argparse.ArgumentParser:
         "report", help="Print an image collection report."
     )
     add_common_upload_args(report_parser)
+    report_parser.add_argument(
+        "-s", "--large-image-threshold",
+        type=file_size_arg,
+        default=it.DEFAULT_LARGE_IMAGE_THRESHOLD,
+        help="Show only images larger than this size, such as 1 MB or 500k.",
+    )
     report_parser.set_defaults(func=report_uploads)
 
     clean_parser = subparsers.add_parser(

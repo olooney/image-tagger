@@ -31,7 +31,12 @@ from pydantic import BaseModel, create_model
 from send2trash import send2trash
 from send2trash.exceptions import TrashPermissionError
 
-from constants import IMAGE_EXTENSIONS, WELCOME_EXTENSIONS, DEFAULT_WALL_RANDOM_SEED
+from constants import (
+    DEFAULT_WALL_RANDOM_SEED,
+    GALLERY_NAME,
+    IMAGE_EXTENSIONS,
+    WELCOME_EXTENSIONS,
+)
 from stackmap import StackMap
 from util import (
     Pathish,
@@ -204,6 +209,7 @@ csv_columns: list[str] = [
 DEDUPE_REVIEW_FILENAME: Path = Path("dedupe_review.html")
 DEDUPE_EMBEDDINGS_FILENAME: Path = Path("vectors.npz")
 EMBEDDING_CACHE_VERSION: int = 3
+DEFAULT_LARGE_IMAGE_THRESHOLD: int = 1_000_000
 
 
 class VisionModelProvider(Enum):
@@ -1396,9 +1402,35 @@ def _format_largest_images(
     ]
 
 
+def _format_filename_mismatches(
+    directory_path: Path,
+    mismatches: list[tuple[Path, str]],
+) -> list[str]:
+    """Format current and suggested filenames in aligned columns."""
+    items = [
+        (quote_display_path(path.relative_to(directory_path)), clean_filename)
+        for path, clean_filename in mismatches[:5]
+    ]
+    filename_width = max(len(current_filename) for current_filename, _ in items)
+    return [
+        f"{current_filename:<{filename_width}}     {clean_filename}"
+        for current_filename, clean_filename in items
+    ]
+
+
+def gallery_is_out_of_date(directory_path: Path, image_paths: list[Path]) -> bool:
+    """Return whether the gallery index predates the newest image."""
+    gallery_path = directory_path / GALLERY_NAME
+    return bool(image_paths) and gallery_path.is_file() and (
+        gallery_path.stat().st_mtime_ns
+        < max(path.stat().st_mtime_ns for path in image_paths)
+    )
+
+
 def report_images(
     directory: Pathish,
     metadata_filename: Pathish,
+    large_image_threshold: int = DEFAULT_LARGE_IMAGE_THRESHOLD,
 ) -> str:
     """Build a text report for the images in one directory tree."""
     directory_path = Path(directory)
@@ -1420,7 +1452,7 @@ def report_images(
     genre_counts: Counter[str] = Counter()
     tag_counts: Counter[str] = Counter()
     missing_metadata_count = 0
-    clean_filename_mismatch_count = 0
+    clean_filename_mismatches: list[tuple[Path, str]] = []
     for path in image_paths:
         row = metadata_by_path.get(path.resolve())
         if row is None:
@@ -1440,7 +1472,7 @@ def report_images(
             tag_counts.update(tag for tag in tags if isinstance(tag, str) and tag)
         clean_filename = row.get("clean_filename", "").strip()
         if clean_filename and path.name != clean_filename:
-            clean_filename_mismatch_count += 1
+            clean_filename_mismatches.append((path, clean_filename))
 
     dedupe_image_paths = find_images(directory_path)
     reviewed_paths = _reviewed_cached_image_paths(
@@ -1452,10 +1484,22 @@ def report_images(
     )
     unreviewed_count = len(dedupe_image_paths) - len(reviewed_paths)
     top_tags = Counter(dict(tag_counts.most_common(20)))
+    large_image_paths = [
+        path for path in image_paths if path.stat().st_size > large_image_threshold
+    ]
     largest_paths = {
-        *sorted(image_paths, key=lambda path: (-image_dimensions(path)[0], path))[:5],
-        *sorted(image_paths, key=lambda path: (-image_dimensions(path)[1], path))[:5],
-        *sorted(image_paths, key=lambda path: (-path.stat().st_size, path))[:5],
+        *sorted(
+            large_image_paths,
+            key=lambda path: (-image_dimensions(path)[0], path),
+        )[:5],
+        *sorted(
+            large_image_paths,
+            key=lambda path: (-image_dimensions(path)[1], path),
+        )[:5],
+        *sorted(
+            large_image_paths,
+            key=lambda path: (-path.stat().st_size, path),
+        )[:5],
     }
 
     sections = [
@@ -1474,11 +1518,19 @@ def report_images(
         outstanding_checks.append(
             f"Number of images not reviewed for dupes: {unreviewed_count}"
         )
-    if clean_filename_mismatch_count:
+    if clean_filename_mismatches:
         outstanding_checks.append(
             "Number of images where the filename does not match the clean filename: "
-            f"{clean_filename_mismatch_count}"
+            f"{len(clean_filename_mismatches)}"
         )
+        outstanding_checks.extend(
+            _format_filename_mismatches(
+                directory_path,
+                clean_filename_mismatches,
+            )
+        )
+    if gallery_is_out_of_date(directory_path, image_paths):
+        outstanding_checks.append(f"{GALLERY_NAME.name} is out of date.")
     if outstanding_checks:
         sections.append(outstanding_checks)
     if largest_paths:

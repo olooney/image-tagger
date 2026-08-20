@@ -759,7 +759,7 @@ def test_report_cli_summarizes_images_metadata_and_dedupe_status(
         ),
     )
 
-    output = run_cli("report", str(tmp_path))
+    output = run_cli("report", str(tmp_path), "--large-image-threshold", "1B")
 
     assert "Number of images: 4" in output
     assert "Number of images: 4\n\nExtensions:\n    .jpg     3\n    .png     1" in output
@@ -772,6 +772,7 @@ def test_report_cli_summarizes_images_metadata_and_dedupe_status(
         "Number of images where the filename does not match the clean filename: 1"
         in output
     )
+    assert "tall.png     clean_tall.png" in output
     assert "\n\nLargest Images:\n\n" in output
     assert "Biggest images:" not in output
     for path in image_paths:
@@ -835,13 +836,82 @@ def test_report_omits_empty_outstanding_checks_section(tmp_path: Path) -> None:
         ),
     )
 
-    output = it.report_images(tmp_path, metadata_filename)
+    output = it.report_images(
+        tmp_path,
+        metadata_filename,
+        large_image_threshold=1,
+    )
 
     assert "not in metadata" not in output
     assert "not reviewed for dupes" not in output
     assert "does not match the clean filename" not in output
     assert "\n\n\n" not in output
     assert "Largest Images:\n\n" in output
+
+
+def test_report_limits_filename_mismatch_examples_to_five(tmp_path: Path) -> None:
+    """Keep filename cleanup examples short and consistently aligned."""
+    mismatches = [
+        (tmp_path / f"current_{index}.jpg", f"clean_{index}.jpg")
+        for index in range(6)
+    ]
+
+    lines = it._format_filename_mismatches(tmp_path, mismatches)
+
+    assert len(lines) == 5
+    assert lines[0] == "current_0.jpg     clean_0.jpg"
+    assert "current_5.jpg" not in "\n".join(lines)
+
+
+def test_report_identifies_an_out_of_date_gallery(tmp_path: Path) -> None:
+    """Warn only when the gallery index predates an image."""
+    image_path = tmp_path / "new.jpg"
+    Image.new("RGB", (10, 10)).save(image_path)
+    gallery_path = tmp_path / "index.html"
+    gallery_path.write_text("gallery", encoding="utf-8")
+    gallery_stat = gallery_path.stat()
+    image_mtime_ns = image_path.stat().st_mtime_ns
+    os.utime(
+        gallery_path,
+        ns=(gallery_stat.st_atime_ns, image_mtime_ns - 1),
+    )
+
+    stale_output = it.report_images(tmp_path, tmp_path / "image_metadata.csv")
+
+    assert "index.html is out of date." in stale_output
+
+    os.utime(
+        gallery_path,
+        ns=(gallery_stat.st_atime_ns, image_mtime_ns + 1),
+    )
+    current_output = it.report_images(tmp_path, tmp_path / "image_metadata.csv")
+
+    assert "index.html is out of date." not in current_output
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1 MB", 1_000_000),
+        ("1mb", 1_000_000),
+        ("1m", 1_000_000),
+        ("500k", 500_000),
+        ("1,024", 1024),
+    ],
+)
+def test_file_size_arg_accepts_friendly_file_sizes(value: str, expected: int) -> None:
+    """Accept common spellings for a report image-size threshold."""
+    assert cli.file_size_arg(value) == expected
+
+
+def test_report_omits_largest_images_below_the_threshold(tmp_path: Path) -> None:
+    """Hide the largest-image section when nothing exceeds the threshold."""
+    image_path = tmp_path / "small.jpg"
+    Image.new("RGB", (10, 10)).save(image_path)
+
+    output = it.report_images(tmp_path, tmp_path / "image_metadata.csv")
+
+    assert "Largest Images:" not in output
 
 
 def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
