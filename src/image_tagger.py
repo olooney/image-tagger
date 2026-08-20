@@ -122,6 +122,14 @@ class DedupeReviewEntry:
     is_removal: bool = False
 
 
+@dataclass
+class EmbeddingCache:
+    """Persisted embeddings and image paths confirmed by dedupe."""
+
+    entries: dict[str, tuple[int, int, np.ndarray]]
+    processed_paths: set[str]
+
+
 class ImageComparisonMethod(Protocol):
     """Score image pairs; higher scores mean more likely duplicates."""
 
@@ -190,7 +198,7 @@ csv_columns: list[str] = [
 ]
 DEDUPE_REVIEW_FILENAME: Path = Path("dedupe_review.html")
 DEDUPE_EMBEDDINGS_FILENAME: Path = Path("vectors.npz")
-EMBEDDING_CACHE_VERSION: int = 1
+EMBEDDING_CACHE_VERSION: int = 2
 
 
 class VisionModelProvider(Enum):
@@ -605,7 +613,8 @@ def embed_image_paths(
     """Embed image paths as normalized CLIP vectors, reusing a cache when given."""
     clip = clip_adapter or ClipImageComparisonMethod()
     cache_path = Path(cache_filename) if cache_filename is not None else None
-    cache_entries = _load_embedding_cache(cache_path, cache_key)
+    cache = _load_embedding_cache(cache_path, cache_key)
+    cache_entries = cache.entries
     image_metadata = {
         path: (str(path.resolve()), path.stat().st_size, path.stat().st_mtime_ns)
         for path in image_paths
@@ -642,7 +651,7 @@ def embed_image_paths(
             print(f"embedded {complete_count}/{len(uncached_paths)}")
 
     if cache_path is not None and uncached_paths:
-        _save_embedding_cache(cache_path, cache_key, cache_entries)
+        _save_embedding_cache(cache_path, cache_key, cache)
 
     if not image_paths:
         return np.empty((0, 0), dtype=np.float64)
@@ -652,17 +661,17 @@ def embed_image_paths(
 def _load_embedding_cache(
     cache_path: Path | None,
     cache_key: str | None,
-) -> dict[str, tuple[int, int, np.ndarray]]:
+) -> EmbeddingCache:
     """Load compatible embedding cache entries without disrupting dedupe."""
     if cache_path is None or not cache_path.is_file():
-        return {}
+        return EmbeddingCache(entries={}, processed_paths=set())
     try:
         with np.load(cache_path, allow_pickle=False) as cache:
-            if (
-                int(cache["version"][0]) != EMBEDDING_CACHE_VERSION
-                or str(cache["cache_key"][0]) != (cache_key or "")
-            ):
-                return {}
+            version = int(cache["version"][0])
+            if version not in {1, EMBEDDING_CACHE_VERSION} or str(
+                cache["cache_key"][0]
+            ) != (cache_key or ""):
+                return EmbeddingCache(entries={}, processed_paths=set())
             paths = cache["paths"]
             sizes = cache["sizes"]
             mtimes_ns = cache["mtimes_ns"]
@@ -674,8 +683,8 @@ def _load_embedding_cache(
                 or vectors.ndim != 2
                 or len(vectors) != len(paths)
             ):
-                return {}
-            return {
+                return EmbeddingCache(entries={}, processed_paths=set())
+            entries = {
                 str(path): (int(size), int(mtime_ns), vector)
                 for path, size, mtime_ns, vector in zip(
                     paths,
@@ -685,18 +694,27 @@ def _load_embedding_cache(
                     strict=True,
                 )
             }
+            processed_paths = (
+                {str(path) for path in cache["processed_paths"]}
+                if version == EMBEDDING_CACHE_VERSION
+                else set(entries)
+            )
+            return EmbeddingCache(
+                entries=entries,
+                processed_paths=processed_paths,
+            )
     except (EOFError, KeyError, OSError, ValueError):
-        return {}
+        return EmbeddingCache(entries={}, processed_paths=set())
 
 
 def _save_embedding_cache(
     cache_path: Path,
     cache_key: str | None,
-    entries: Mapping[str, tuple[int, int, np.ndarray]],
+    cache: EmbeddingCache,
 ) -> None:
     """Atomically save compressed embedding vectors and their file fingerprints."""
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    ordered_entries = sorted(entries.items())
+    ordered_entries = sorted(cache.entries.items())
     paths = np.array([path for path, _ in ordered_entries])
     sizes = np.array([entry[0] for _, entry in ordered_entries], dtype=np.int64)
     mtimes_ns = np.array([entry[1] for _, entry in ordered_entries], dtype=np.int64)
@@ -711,10 +729,75 @@ def _save_embedding_cache(
             sizes=sizes,
             mtimes_ns=mtimes_ns,
             vectors=vectors,
+            processed_paths=np.array(sorted(cache.processed_paths)),
         )
         temporary_path.replace(cache_path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _processed_cached_image_paths(
+    image_paths: Iterable[Path],
+    cache_path: Path,
+    cache_key: str,
+) -> set[Path]:
+    """Return current images confirmed by a prior dedupe run."""
+    cache = _load_embedding_cache(cache_path, cache_key)
+    processed_paths: set[Path] = set()
+    for path in image_paths:
+        path_key = str(path.resolve())
+        cached_entry = cache.entries.get(path_key)
+        if cached_entry is None or path_key not in cache.processed_paths:
+            continue
+        size, mtime_ns, _ = cached_entry
+        stat = path.stat()
+        if (size, mtime_ns) == (stat.st_size, stat.st_mtime_ns):
+            processed_paths.add(path)
+    return processed_paths
+
+
+def _mark_images_deduped(
+    image_paths: Iterable[Path],
+    cache_path: Path,
+    cache_key: str,
+) -> None:
+    """Mark unchanged cached images as successfully deduped."""
+    cache = _load_embedding_cache(cache_path, cache_key)
+    changed = False
+    for path in image_paths:
+        path_key = str(path.resolve())
+        cached_entry = cache.entries.get(path_key)
+        if cached_entry is None:
+            continue
+        size, mtime_ns, _ = cached_entry
+        stat = path.stat()
+        if (
+            (size, mtime_ns) == (stat.st_size, stat.st_mtime_ns)
+            and path_key not in cache.processed_paths
+        ):
+            cache.processed_paths.add(path_key)
+            changed = True
+    if changed:
+        _save_embedding_cache(cache_path, cache_key, cache)
+
+
+def prune_embedding_cache(cache_path: Pathish) -> int:
+    """Remove cache entries whose image paths no longer exist."""
+    path = Path(cache_path)
+    if not path.is_file():
+        return 0
+    cache = _load_embedding_cache(path, CLIP_MODEL)
+    live_entries = {
+        path_key: entry
+        for path_key, entry in cache.entries.items()
+        if Path(path_key).is_file()
+    }
+    removed_count = len(cache.entries) - len(live_entries)
+    if removed_count:
+        cache.entries = live_entries
+        cache.processed_paths.intersection_update(live_entries)
+        _save_embedding_cache(path, CLIP_MODEL, cache)
+    return removed_count
 
 
 def image_dimensions(image_path: Pathish) -> tuple[int, int]:
@@ -810,6 +893,72 @@ def dedupe_image_matches(
         verbose=verbose,
     )
 
+    return _dedupe_similarities(
+        similarities,
+        automatic_threshold=automatic_threshold,
+        llm_threshold=llm_threshold,
+        provider=provider,
+        client_adapter=client_adapter,
+        rejected_llm_matches=rejected_llm_matches,
+        verbose=verbose,
+    )
+
+
+def dedupe_new_image_matches(
+    new_images: Iterable[Pathish],
+    processed_images: Iterable[Pathish],
+    *,
+    automatic_threshold: float = 0.99,
+    llm_threshold: float = 0.9,
+    provider: VisionModelProvider = VisionModelProvider.OPENAI,
+    batch_size: int = 32,
+    comparison_method: ImageComparisonMethod | None = None,
+    client_adapter: VisionModelClientAdapter | None = None,
+    rejected_llm_matches: list[ImageDuplicateMatch] | None = None,
+    verbose: int = 1,
+) -> list[ImageDuplicateMatch]:
+    """Find duplicates involving only images not yet processed by dedupe."""
+    new_paths = sorted(Path(path) for path in new_images)
+    processed_paths = sorted(Path(path) for path in processed_images)
+    if not new_paths:
+        return []
+    method = comparison_method or ClipImageComparisonMethod()
+    similarities = method.compare(
+        new_paths,
+        batch_size=batch_size,
+        verbose=verbose,
+    )
+    if processed_paths:
+        similarities.extend(
+            method.compare(
+                new_paths,
+                processed_paths,
+                batch_size=batch_size,
+                verbose=verbose,
+            )
+        )
+    return _dedupe_similarities(
+        similarities,
+        automatic_threshold=automatic_threshold,
+        llm_threshold=llm_threshold,
+        provider=provider,
+        client_adapter=client_adapter,
+        rejected_llm_matches=rejected_llm_matches,
+        verbose=verbose,
+    )
+
+
+def _dedupe_similarities(
+    similarities: Iterable[ImageSimilarity],
+    *,
+    automatic_threshold: float,
+    llm_threshold: float,
+    provider: VisionModelProvider,
+    client_adapter: VisionModelClientAdapter | None,
+    rejected_llm_matches: list[ImageDuplicateMatch] | None,
+    verbose: int,
+) -> list[ImageDuplicateMatch]:
+    """Apply automatic and LLM duplicate decisions to similarity candidates."""
     matches: list[ImageDuplicateMatch] = []
     planned_removals: set[Path] = set()
     borderline_similarities: list[ImageSimilarity] = []
@@ -833,54 +982,61 @@ def dedupe_image_matches(
         elif similarity.score >= llm_threshold:
             borderline_similarities.append(similarity)
 
-    for similarity in borderline_similarities:
-        if {similarity.left_path, similarity.right_path} & planned_removals:
-            continue
-        if verbose >= 2:
-            print(
-                f"LLM duplicate candidate {similarity.score * 100:0.2f}%:\n"
-                f"  left: {format_image_detail(similarity.left_path)}\n"
-                f"  right: {format_image_detail(similarity.right_path)}"
+    owned_adapter = client_adapter is None
+    try:
+        for similarity in borderline_similarities:
+            if {similarity.left_path, similarity.right_path} & planned_removals:
+                continue
+            if verbose >= 2:
+                print(
+                    f"LLM duplicate candidate {similarity.score * 100:0.2f}%:\n"
+                    f"  left: {format_image_detail(similarity.left_path)}\n"
+                    f"  right: {format_image_detail(similarity.right_path)}"
+                )
+            if client_adapter is None:
+                client_adapter = get_vision_model_client_adapter(provider)
+            judgement = judge_same_image_match(
+                similarity.left_path,
+                similarity.right_path,
+                provider=provider,
+                client_adapter=client_adapter,
             )
-        judgement = judge_same_image_match(
-            similarity.left_path,
-            similarity.right_path,
-            provider=provider,
-            client_adapter=client_adapter,
-        )
-        if verbose >= 2:
-            print(f"  keep: {judgement.keep}")
-            if judgement.thinking:
-                print(f"  reason: {judgement.thinking}")
-        if judgement.keep == "both":
-            if rejected_llm_matches is not None:
-                rejected_llm_matches.append(
+            if verbose >= 2:
+                print(f"  keep: {judgement.keep}")
+                if judgement.thinking:
+                    print(f"  reason: {judgement.thinking}")
+            if judgement.keep == "both":
+                if rejected_llm_matches is not None:
+                    rejected_llm_matches.append(
+                        ImageDuplicateMatch(
+                            score=similarity.score,
+                            left_path=similarity.left_path,
+                            right_path=similarity.right_path,
+                            decision_source="llm",
+                            judgement_text=judgement.thinking,
+                            presented_left_path=similarity.left_path,
+                            presented_right_path=similarity.right_path,
+                        )
+                    )
+                continue
+            kept_path = similarity.left_path if judgement.keep == "left" else similarity.right_path
+            duplicate_path = similarity.right_path if judgement.keep == "left" else similarity.left_path
+            if kept_path != duplicate_path:
+                matches.append(
                     ImageDuplicateMatch(
                         score=similarity.score,
-                        left_path=similarity.left_path,
-                        right_path=similarity.right_path,
+                        left_path=kept_path,
+                        right_path=duplicate_path,
                         decision_source="llm",
                         judgement_text=judgement.thinking,
                         presented_left_path=similarity.left_path,
                         presented_right_path=similarity.right_path,
                     )
                 )
-            continue
-        kept_path = similarity.left_path if judgement.keep == "left" else similarity.right_path
-        duplicate_path = similarity.right_path if judgement.keep == "left" else similarity.left_path
-        if kept_path != duplicate_path:
-            matches.append(
-                ImageDuplicateMatch(
-                    score=similarity.score,
-                    left_path=kept_path,
-                    right_path=duplicate_path,
-                    decision_source="llm",
-                    judgement_text=judgement.thinking,
-                    presented_left_path=similarity.left_path,
-                    presented_right_path=similarity.right_path,
-                )
-            )
-            planned_removals.add(duplicate_path)
+                planned_removals.add(duplicate_path)
+    finally:
+        if owned_adapter and client_adapter is not None:
+            client_adapter.cleanup()
 
     return sorted(matches, key=lambda match: match.score, reverse=True)
 
@@ -1125,16 +1281,24 @@ def dedupe_images(
     image_paths = sorted(find_images(directory_path))
     if verbose == 1:
         print(f"working in {quote_display_path(directory_path)}")
+    cache_filename = directory_path / DEDUPE_EMBEDDINGS_FILENAME
+    processed_image_paths = _processed_cached_image_paths(
+        image_paths,
+        cache_filename,
+        CLIP_MODEL,
+    )
+    new_image_paths = [path for path in image_paths if path not in processed_image_paths]
     rejected_llm_matches: list[ImageDuplicateMatch] = []
     comparison_method = (
         ClipImageComparisonMethod(
-            cache_filename=directory_path / DEDUPE_EMBEDDINGS_FILENAME,
+            cache_filename=cache_filename,
         )
-        if len(image_paths) >= 2
+        if new_image_paths
         else None
     )
-    matches = dedupe_image_matches(
-        image_paths,
+    matches = dedupe_new_image_matches(
+        new_image_paths,
+        processed_image_paths,
         automatic_threshold=automatic_threshold,
         llm_threshold=llm_threshold,
         provider=provider,
@@ -1145,6 +1309,7 @@ def dedupe_images(
     )
 
     removed_paths: set[Path] = set()
+    removal_failed = False
     review_entries = [
         _dedupe_review_entry(
             match,
@@ -1185,6 +1350,7 @@ def dedupe_images(
             if verbose >= 1:
                 print("success!")
         except Exception:
+            removal_failed = True
             action = _duplicate_removal_action(
                 review_entry.duplicate_side,
                 dry_run=False,
@@ -1201,6 +1367,13 @@ def dedupe_images(
                 action=action,
                 is_removal=removed,
             )
+        )
+
+    if not dry_run and not removal_failed:
+        _mark_images_deduped(
+            (path for path in image_paths if path.exists()),
+            cache_filename,
+            CLIP_MODEL,
         )
 
     review_filename = directory_path / DEDUPE_REVIEW_FILENAME

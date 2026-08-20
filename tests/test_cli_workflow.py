@@ -268,6 +268,99 @@ def test_embed_image_paths_reuses_cached_vectors_for_unchanged_images(
     assert np.array_equal(first_vectors, second_vectors)
 
 
+def test_dedupe_new_image_matches_skips_processed_image_pairs(
+    tmp_path: Path,
+) -> None:
+    """Compare new images against each other and processed images only."""
+    old_path = tmp_path / "old.jpg"
+    first_new_path = tmp_path / "first-new.jpg"
+    second_new_path = tmp_path / "second-new.jpg"
+    comparison_method = FakeImageComparisonMethod({})
+
+    matches = it.dedupe_new_image_matches(
+        [second_new_path, first_new_path],
+        [old_path],
+        comparison_method=comparison_method,
+        verbose=0,
+    )
+
+    assert matches == []
+    assert comparison_method.calls == [
+        ([first_new_path, second_new_path], None, 32, 0),
+        ([first_new_path, second_new_path], [old_path], 32, 0),
+    ]
+
+
+def test_dedupe_images_skips_model_when_all_images_are_processed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid constructing CLIP when every current image was already deduped."""
+    image_paths = [tmp_path / "first.jpg", tmp_path / "second.jpg"]
+    for path in image_paths:
+        Image.new("RGB", (4, 4)).save(path)
+    cache_entries = {
+        str(path.resolve()): (
+            path.stat().st_size,
+            path.stat().st_mtime_ns,
+            np.ones(3, dtype=np.float64),
+        )
+        for path in image_paths
+    }
+    it._save_embedding_cache(
+        tmp_path / it.DEDUPE_EMBEDDINGS_FILENAME,
+        it.CLIP_MODEL,
+        it.EmbeddingCache(
+            entries=cache_entries,
+            processed_paths=set(cache_entries),
+        ),
+    )
+
+    def unexpected_clip_model(**kwargs: object) -> None:
+        """Fail if the all-processed path constructs CLIP."""
+        raise AssertionError("CLIP should not load for processed images")
+
+    monkeypatch.setattr(it, "ClipImageComparisonMethod", unexpected_clip_model)
+
+    assert it.dedupe_images(tmp_path, verbose=0) == []
+
+
+def test_dedupe_new_image_matches_creates_one_llm_client_lazily(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create and reuse one vision client only for borderline candidates."""
+    image_paths = [tmp_path / f"image-{index}.jpg" for index in range(3)]
+    for path in image_paths:
+        Image.new("RGB", (4, 4)).save(path)
+    comparison_method = FakeImageComparisonMethod(
+        {
+            ("image-0.jpg", "image-1.jpg"): 0.95,
+            ("image-0.jpg", "image-2.jpg"): 0.95,
+        }
+    )
+    created_clients: list[MockSameImageClientAdapter] = []
+
+    def create_client(provider: it.VisionModelProvider) -> MockSameImageClientAdapter:
+        """Create a recorded LLM client."""
+        client = MockSameImageClientAdapter("both")
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(it, "get_vision_model_client_adapter", create_client)
+
+    matches = it.dedupe_new_image_matches(
+        image_paths,
+        [],
+        comparison_method=comparison_method,
+        verbose=0,
+    )
+
+    assert matches == []
+    assert len(created_clients) == 1
+    assert len(created_clients[0].calls) == 2
+
+
 @pytest.fixture(autouse=True)
 def disable_browser_preview(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prevent CLI workflow tests from opening browser windows."""
@@ -905,6 +998,24 @@ def test_prune_cli_removes_rows_without_existing_images(
                 "description": "Remove me.",
             }
         )
+    missing_image_filename = uploads_dir / "missing.jpg"
+    cache_entries = {
+        str(path.resolve()): (
+            path.stat().st_size if path.is_file() else 0,
+            path.stat().st_mtime_ns if path.is_file() else 0,
+            np.ones(3, dtype=np.float64),
+        )
+        for path in [image_filename, missing_image_filename]
+    }
+    cache_filename = uploads_dir / it.DEDUPE_EMBEDDINGS_FILENAME
+    it._save_embedding_cache(
+        cache_filename,
+        it.CLIP_MODEL,
+        it.EmbeddingCache(
+            entries=cache_entries,
+            processed_paths=set(cache_entries),
+        ),
+    )
 
     output = run_cli("prune", str(uploads_dir))
 
@@ -913,6 +1024,9 @@ def test_prune_cli_removes_rows_without_existing_images(
         rows = list(csv.DictReader(metadata_file))
     assert [row["original_filename"] for row in rows] == ["kept.jpg"]
     assert "Remove me." not in metadata_filename.read_text(encoding="utf-8")
+    cache = it._load_embedding_cache(cache_filename, it.CLIP_MODEL)
+    assert set(cache.entries) == {str(image_filename.resolve())}
+    assert cache.processed_paths == {str(image_filename.resolve())}
 
 
 def test_shelve_cli_moves_misplaced_images_from_directory_alias(
@@ -2036,7 +2150,7 @@ def test_dedupe_cli_removes_duplicate_with_relative_default_output(
 
     monkeypatch.setattr(
         it,
-        "dedupe_image_matches",
+        "dedupe_new_image_matches",
         lambda *args, **kwargs: [
             it.ImageDuplicateMatch(
                 score=1.0,
@@ -2134,7 +2248,7 @@ def test_dedupe_permanently_deletes_when_recycle_bin_is_unavailable(
     duplicate.touch()
     monkeypatch.setattr(
         it,
-        "dedupe_image_matches",
+        "dedupe_new_image_matches",
         lambda *args, **kwargs: [
             it.ImageDuplicateMatch(
                 score=1.0,

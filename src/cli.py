@@ -121,6 +121,8 @@ def prune_uploads(args: argparse.Namespace) -> None:
         verbose=args.verbose,
         dry_run=args.dry_run,
     )
+    if not args.dry_run:
+        it.prune_embedding_cache(args.directory / it.DEDUPE_EMBEDDINGS_FILENAME)
 
 
 def rename_uploads(args: argparse.Namespace) -> None:
