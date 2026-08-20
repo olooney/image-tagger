@@ -201,6 +201,11 @@ def wall_uploads(args: argparse.Namespace) -> None:
         preview(output_filename)
 
 
+def report_uploads(args: argparse.Namespace) -> None:
+    """Print an image collection report."""
+    print(it.report_images(args.directory, args.metadata_filename))
+
+
 def review_uploads(args: argparse.Namespace) -> None:
     """Serve an editable metadata review app."""
     if not args.metadata_filename.is_file():
@@ -398,6 +403,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--preview", action=argparse.BooleanOptionalAction, default=True
     )
     wall_parser.set_defaults(func=wall_uploads)
+
+    report_parser = subparsers.add_parser(
+        "report", help="Print an image collection report."
+    )
+    add_common_upload_args(report_parser)
+    report_parser.set_defaults(func=report_uploads)
 
     clean_parser = subparsers.add_parser(
         "clean", help="Remove generated metadata and gallery files."

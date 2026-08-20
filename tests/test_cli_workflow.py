@@ -682,6 +682,168 @@ def test_cli_directory_alias_uses_stackmap_before_local_path(
     assert calls == [shelf_directory, Path("ghosts")]
 
 
+def test_report_cli_summarizes_images_metadata_and_dedupe_status(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Report image counts, metadata breakdowns, review gaps, and large images."""
+    image_paths = [
+        tmp_path / "wide.jpg",
+        tmp_path / "tall.png",
+        tmp_path / "small.jpg",
+        tmp_path / "missing.jpg",
+    ]
+    for path, size in zip(image_paths, [(50, 20), (20, 60), (10, 10), (8, 8)]):
+        Image.new("RGB", size).save(path)
+    metadata_filename = tmp_path / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    "status": "ok",
+                    "original_filepath": str(image_paths[0]),
+                    "original_filename": "wide.jpg",
+                    "width": 50,
+                    "height": 20,
+                    "category": "art",
+                    "genre": "painting",
+                    "clean_filename": "wide.jpg",
+                    "tags": '["bright", "abstract"]',
+                },
+                {
+                    "status": "ok",
+                    "original_filepath": str(image_paths[1]),
+                    "original_filename": "tall.png",
+                    "width": 20,
+                    "height": 60,
+                    "category": "art",
+                    "genre": "painting",
+                    "clean_filename": "clean_tall.png",
+                    "tags": '["bright", "portrait"]',
+                },
+                {
+                    "status": "ok",
+                    "original_filepath": str(image_paths[2]),
+                    "original_filename": "small.jpg",
+                    "width": 10,
+                    "height": 10,
+                    "category": "photo",
+                    "genre": "portrait",
+                    "clean_filename": "small.jpg",
+                    "tags": '["portrait"]',
+                },
+            ]
+        )
+    cache_filename = tmp_path / it.DEDUPE_EMBEDDINGS_FILENAME
+    it._save_embedding_cache(
+        cache_filename,
+        it.CLIP_MODEL,
+        it.EmbeddingCache(
+            entries={
+                str(path.resolve()): (
+                    path.stat().st_size,
+                    path.stat().st_mtime_ns,
+                    np.ones(3, dtype=np.float64),
+                )
+                for path in image_paths[:3]
+            },
+            reviewed_thresholds={
+                str(path.resolve()): (
+                    it.DEFAULT_AUTOMATIC_THRESHOLD,
+                    it.DEFAULT_LLM_THRESHOLD,
+                )
+                for path in image_paths[:3]
+            },
+        ),
+    )
+
+    output = run_cli("report", str(tmp_path))
+
+    assert "Number of images: 4" in output
+    assert "Number of images: 4\n\nExtensions:\n    .jpg     3\n    .png     1" in output
+    assert "\n\nCategories:\n    art       2\n    photo     1" in output
+    assert "\n\nGenres:\n    painting     2\n    portrait     1" in output
+    assert "\n\nTags:\n    bright       2\n    portrait     2" in output
+    assert (
+        "\n\nNumber of images not in metadata: 1\n"
+        "Number of images not reviewed for dupes: 1\n"
+        "Number of images where the filename does not match the clean filename: 1"
+        in output
+    )
+    assert "\n\nLargest Images:\n\n" in output
+    assert "Biggest images:" not in output
+    for path in image_paths:
+        assert path.name in output
+    assert [
+        output.index("tall.png"),
+        output.index("wide.jpg"),
+        output.index("small.jpg"),
+        output.index("missing.jpg"),
+    ] == sorted(
+        [
+            output.index("tall.png"),
+            output.index("wide.jpg"),
+            output.index("small.jpg"),
+            output.index("missing.jpg"),
+        ]
+    )
+
+
+def test_report_omits_empty_outstanding_checks_section(tmp_path: Path) -> None:
+    """Avoid adding a blank report section when all optional checks are clear."""
+    image_path = tmp_path / "complete.jpg"
+    Image.new("RGB", (10, 10)).save(image_path)
+    ignored_dedupe_path = tmp_path / "complete.gif"
+    Image.new("RGB", (10, 10)).save(ignored_dedupe_path)
+    metadata_filename = tmp_path / "image_metadata.csv"
+    with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(metadata_file, fieldnames=it.csv_columns)
+        writer.writeheader()
+        writer.writerows(
+            {
+                "status": "ok",
+                "original_filepath": str(path),
+                "original_filename": path.name,
+                "width": 10,
+                "height": 10,
+                "category": "art",
+                "genre": "painting",
+                "clean_filename": path.name,
+                "tags": '["bright"]',
+            }
+            for path in [image_path, ignored_dedupe_path]
+        )
+    it._save_embedding_cache(
+        tmp_path / it.DEDUPE_EMBEDDINGS_FILENAME,
+        it.CLIP_MODEL,
+        it.EmbeddingCache(
+            entries={
+                str(image_path.resolve()): (
+                    image_path.stat().st_size,
+                    image_path.stat().st_mtime_ns,
+                    np.ones(3, dtype=np.float64),
+                )
+            },
+            reviewed_thresholds={
+                str(image_path.resolve()): (
+                    it.DEFAULT_AUTOMATIC_THRESHOLD,
+                    it.DEFAULT_LLM_THRESHOLD,
+                )
+            },
+        ),
+    )
+
+    output = it.report_images(tmp_path, metadata_filename)
+
+    assert "not in metadata" not in output
+    assert "not reviewed for dupes" not in output
+    assert "does not match the clean filename" not in output
+    assert "\n\n\n" not in output
+    assert "Largest Images:\n\n" in output
+
+
 def test_full_cli_workflow_converts_tags_renames_galleries_and_shelves(
     workflow_workspace: dict[str, Path],
     run_cli: Callable[..., str],

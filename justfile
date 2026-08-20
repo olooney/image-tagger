@@ -32,6 +32,9 @@ review *args:
 wall *args:
     {{python}} src/cli.py wall {{args}}
 
+report *args:
+    {{python}} src/cli.py report {{args}}
+
 run: convert tag rename review
 
 # test tasks

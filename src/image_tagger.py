@@ -10,6 +10,7 @@ import string
 import time
 import traceback
 from abc import ABC, abstractmethod
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, redirect_stderr
 from dataclasses import dataclass, replace
@@ -30,7 +31,7 @@ from pydantic import BaseModel, create_model
 from send2trash import send2trash
 from send2trash.exceptions import TrashPermissionError
 
-from constants import WELCOME_EXTENSIONS, DEFAULT_WALL_RANDOM_SEED
+from constants import IMAGE_EXTENSIONS, WELCOME_EXTENSIONS, DEFAULT_WALL_RANDOM_SEED
 from stackmap import StackMap
 from util import (
     Pathish,
@@ -1323,6 +1324,172 @@ def find_images(
             filepaths.append(filepath)
 
     return filepaths
+
+
+def _format_report_counts(title: str, counts: Counter[str]) -> list[str]:
+    """Format one labeled, right-aligned report breakdown."""
+    if not counts:
+        return []
+    longest_name = max(len(name) for name in counts)
+    widest_count = len(str(max(counts.values())))
+    lines = [f"{title}:"]
+    lines.extend(
+        f"    {name:<{longest_name}}     {count:>{widest_count}}"
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    return lines
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """Format a file size using decimal units."""
+    units = ["B", "Kb", "Mb", "Gb", "Tb"]
+    size = float(size_bytes)
+    for unit in units:
+        if size < 1000 or unit == units[-1]:
+            return f"{size:.1f} {unit}"
+        size /= 1000
+    raise AssertionError("unreachable")
+
+
+def _metadata_paths(row: Mapping[str, str]) -> set[Path]:
+    """Return possible current image paths represented by one metadata row."""
+    original_filepath = row.get("original_filepath", "").strip()
+    if not original_filepath:
+        return set()
+    original_path = Path(original_filepath)
+    paths = {original_path}
+    clean_filename = row.get("clean_filename", "").strip()
+    if clean_filename:
+        paths.add(original_path.with_name(clean_filename))
+    return paths
+
+
+def _format_largest_images(
+    directory_path: Path,
+    image_paths: set[Path],
+) -> list[str]:
+    """Format the largest image paths as an aligned report table."""
+    sorted_paths = sorted(
+        image_paths,
+        key=lambda path: (
+            -image_dimensions(path)[1],
+            -image_dimensions(path)[0],
+            -path.stat().st_size,
+            path,
+        ),
+    )
+    items = [
+        (
+            quote_display_path(path.relative_to(directory_path)),
+            f"{image_dimensions(path)[0]}x{image_dimensions(path)[1]}",
+            _format_file_size(path.stat().st_size),
+        )
+        for path in sorted_paths
+    ]
+    filename_width = max(len(filename) for filename, _, _ in items)
+    dimensions_width = max(len(dimensions) for _, dimensions, _ in items)
+    size_width = max(len(size) for _, _, size in items)
+    return [
+        f"{filename:<{filename_width}}     {dimensions:>{dimensions_width}}     "
+        f"{size:>{size_width}}"
+        for filename, dimensions, size in items
+    ]
+
+
+def report_images(
+    directory: Pathish,
+    metadata_filename: Pathish,
+) -> str:
+    """Build a text report for the images in one directory tree."""
+    directory_path = Path(directory)
+    image_paths = sorted(
+        path
+        for path in directory_path.rglob("*")
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    metadata_by_path: dict[Path, dict[str, str]] = {}
+    metadata_path = Path(metadata_filename)
+    if metadata_path.is_file():
+        with metadata_path.open(newline="", encoding="utf-8") as metadata_file:
+            for row in csv.DictReader(metadata_file):
+                for path in _metadata_paths(row):
+                    metadata_by_path[path.resolve()] = row
+
+    extension_counts = Counter(path.suffix.lower() for path in image_paths)
+    category_counts: Counter[str] = Counter()
+    genre_counts: Counter[str] = Counter()
+    tag_counts: Counter[str] = Counter()
+    missing_metadata_count = 0
+    clean_filename_mismatch_count = 0
+    for path in image_paths:
+        row = metadata_by_path.get(path.resolve())
+        if row is None:
+            missing_metadata_count += 1
+            continue
+        category = row.get("category", "").strip()
+        genre = row.get("genre", "").strip()
+        if category:
+            category_counts[category] += 1
+        if genre:
+            genre_counts[genre] += 1
+        try:
+            tags = json.loads(row.get("tags", "[]"))
+        except json.JSONDecodeError:
+            tags = []
+        if isinstance(tags, list):
+            tag_counts.update(tag for tag in tags if isinstance(tag, str) and tag)
+        clean_filename = row.get("clean_filename", "").strip()
+        if clean_filename and path.name != clean_filename:
+            clean_filename_mismatch_count += 1
+
+    dedupe_image_paths = find_images(directory_path)
+    reviewed_paths = _reviewed_cached_image_paths(
+        dedupe_image_paths,
+        directory_path / DEDUPE_EMBEDDINGS_FILENAME,
+        CLIP_MODEL,
+        DEFAULT_AUTOMATIC_THRESHOLD,
+        DEFAULT_LLM_THRESHOLD,
+    )
+    unreviewed_count = len(dedupe_image_paths) - len(reviewed_paths)
+    top_tags = Counter(dict(tag_counts.most_common(20)))
+    largest_paths = {
+        *sorted(image_paths, key=lambda path: (-image_dimensions(path)[0], path))[:5],
+        *sorted(image_paths, key=lambda path: (-image_dimensions(path)[1], path))[:5],
+        *sorted(image_paths, key=lambda path: (-path.stat().st_size, path))[:5],
+    }
+
+    sections = [
+        [f"Number of images: {len(image_paths)}"],
+        _format_report_counts("Extensions", extension_counts),
+        _format_report_counts("Categories", category_counts),
+        _format_report_counts("Genres", genre_counts),
+        _format_report_counts("Tags", top_tags),
+    ]
+    outstanding_checks: list[str] = []
+    if missing_metadata_count:
+        outstanding_checks.append(
+            f"Number of images not in metadata: {missing_metadata_count}"
+        )
+    if unreviewed_count:
+        outstanding_checks.append(
+            f"Number of images not reviewed for dupes: {unreviewed_count}"
+        )
+    if clean_filename_mismatch_count:
+        outstanding_checks.append(
+            "Number of images where the filename does not match the clean filename: "
+            f"{clean_filename_mismatch_count}"
+        )
+    if outstanding_checks:
+        sections.append(outstanding_checks)
+    if largest_paths:
+        sections.append(
+            [
+                "Largest Images:",
+                "",
+                *_format_largest_images(directory_path, largest_paths),
+            ]
+        )
+    return "\n\n".join("\n".join(section) for section in sections if section)
 
 
 def dedupe_images(

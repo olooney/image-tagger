@@ -40,6 +40,7 @@ just tag [DIRECTORY]
 just rename [DIRECTORY]
 just gallery [DIRECTORY]
 just wall [DIRECTORY]
+just report [DIRECTORY]
 just shelve [DIRECTORY]
 ```
 
@@ -84,6 +85,9 @@ above `--automatic-threshold` are removed automatically; scores at or above
 under `DIRECTORY`. It uses relative image paths, computes a median image aspect
 ratio up front, and displays the images in equal-sized grid cells with a
 click-to-open full-size overlay.
+
+`just report` prints image totals, metadata breakdowns, outstanding metadata and
+dedupe work, filename cleanup gaps, and the largest images in `DIRECTORY`.
 
 Vision Models
 -------------
