@@ -30,13 +30,14 @@ dependencies = [
     "ty>=0.0.44",
     "uvicorn>=0.35.0",
     "pytest-cov>=7.1.0",
+    "opencv-python-headless>=5.0.0.93",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
 [tool.setuptools]
-py-modules = ["cli", "constants", "convert", "image_tagger", "review_app", "stackmap", "util"]
+py-modules = ["cli", "constants", "convert", "image_tagger", "review_app", "stackmap", "transform", "util"]
 packages = ["image_tagger_data"]
 
 [tool.setuptools.package-dir]

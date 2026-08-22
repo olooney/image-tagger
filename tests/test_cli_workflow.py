@@ -20,6 +20,7 @@ from send2trash.exceptions import TrashPermissionError
 import cli
 import image_tagger as it
 import review_app
+import transform
 from constants import WELCOME_EXTENSIONS
 from stackmap import StackMap, find_stackmap
 from util import display_path, make_unique, quote_display_path
@@ -166,6 +167,55 @@ class MockSameImageClientAdapter(it.VisionModelClientAdapter):
         pass
 
 
+class MockTransformClientAdapter(it.VisionModelClientAdapter):
+    """Vision adapter returning an accepted perspective transform."""
+
+    provider_name = "Mock"
+    model = "mock-transform"
+
+    def __init__(self) -> None:
+        """Start with no recorded transform requests."""
+        self.calls: list[list[str] | str] = []
+
+    def vision_task(
+        self,
+        image_base64: str | list[str],
+        prompt: str,
+        response_format: type[BaseModel],
+    ) -> it.VisionTaskResult:
+        """Return an initial corner estimate then an accepted review."""
+        self.calls.append(image_base64)
+        if response_format is transform.TransformAssessment:
+            content = {
+                "strategy": "contour_quadrilateral",
+                "confidence": 0.9,
+                "reason": "Clear rectangle.",
+                "approximate_corners": [[5, 5], [95, 5], [95, 95], [5, 95]],
+                "background": None,
+                "parameters": {
+                    "edge_strength": None,
+                    "expected_boundary_completeness": None,
+                    "notes": None,
+                },
+            }
+        else:
+            content = {
+                "decision": "good_enough",
+                "confidence": 0.9,
+                "reason": "Crop is square and front-facing.",
+                "replacement_corners": None,
+            }
+        return it.VisionTaskResult(
+            data=response_format.model_validate(content),
+            model=self.model,
+            total_tokens=0,
+        )
+
+    def cleanup(self) -> None:
+        """No-op cleanup for tests."""
+        pass
+
+
 class FakeImageComparisonMethod:
     """Comparison method returning prebuilt similarities."""
 
@@ -223,6 +273,55 @@ def test_clip_comparison_defers_model_loading() -> None:
     comparison_method = it.ClipImageComparisonMethod()
 
     assert comparison_method.client is None
+
+
+def test_transform_images_writes_reviewed_sibling_and_skips_transformed_files(
+    tmp_path: Path,
+) -> None:
+    """Create one reviewed transform without treating its output as a new input."""
+    source_path = tmp_path / "book.jpg"
+    Image.new("RGB", (100, 100), "white").save(source_path)
+    skipped_path = tmp_path / "already.transformed.jpg"
+    Image.new("RGB", (100, 100), "black").save(skipped_path)
+    client = MockTransformClientAdapter()
+
+    entries = transform.transform_images(
+        tmp_path,
+        client_adapter=client,
+        verbose=0,
+    )
+
+    target_path = tmp_path / "book.transformed.jpg"
+    assert target_path.is_file()
+    assert len(entries) == 1
+    assert entries[0].status == "Transformed"
+    assert len(client.calls) == 2
+    assert isinstance(client.calls[0], list) and len(client.calls[0]) == 1
+    assert isinstance(client.calls[1], list) and len(client.calls[1]) == 3
+    review_html = (tmp_path / transform.TRANSFORM_REVIEW_FILENAME).read_text()
+    assert "Perspective Transform Review" in review_html
+    assert "book.jpg" in review_html
+    assert "contour_quadrilateral" in review_html
+    assert "good_enough" in review_html
+
+
+def test_perspective_crop_uses_background_hint_outside_source() -> None:
+    """Fill extrapolated perspective pixels with the assessed background color."""
+    source = Image.new("RGB", (100, 100), "white")
+    corners = np.asarray(
+        [[-20, -20], [80, -20], [80, 80], [-20, 80]],
+        dtype=np.float32,
+    )
+    background = transform.BackgroundHint(
+        color_rgb=[12, 34, 56],
+        confidence=1,
+        uniformity="uniform",
+    )
+
+    crop = transform._perspective_crop(source, corners, background=background)
+
+    assert crop is not None
+    assert crop.getpixel((0, 0)) == (12, 34, 56)
 
 
 def test_embed_image_paths_reuses_cached_vectors_for_unchanged_images(

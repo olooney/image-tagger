@@ -14,6 +14,9 @@ tag *args:
 dedupe *args:
     {{python}} src/cli.py dedupe {{args}}
 
+transform *args:
+    {{python}} src/cli.py transform {{args}}
+
 rename *args:
     {{python}} src/cli.py rename {{args}}
 

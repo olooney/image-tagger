@@ -4,6 +4,7 @@ from pathlib import Path
 
 import image_tagger as it
 import review_app
+import transform
 from constants import IMAGE_EXTENSIONS, GALLERY_NAME, METADATA_FILENAME, WELCOME_EXTENSIONS
 from convert import (
     convert_images,
@@ -131,6 +132,20 @@ def dedupe_uploads(args: argparse.Namespace) -> None:
         filename_glob=args.filename,
     )
     review_filename = args.directory / it.DEDUPE_REVIEW_FILENAME
+    if args.preview and review_filename.is_file():
+        preview(review_filename)
+
+
+def transform_uploads(args: argparse.Namespace) -> None:
+    """Perspective-correct upload images using vision-model guidance."""
+    transform.transform_images(
+        args.directory,
+        provider=it.VisionModelProvider(args.provider),
+        max_attempts=args.max_attempts,
+        verbose=args.verbose,
+        dry_run=args.dry_run,
+    )
+    review_filename = args.directory / transform.TRANSFORM_REVIEW_FILENAME
     if args.preview and review_filename.is_file():
         preview(review_filename)
 
@@ -340,6 +355,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--preview", action=argparse.BooleanOptionalAction, default=True
     )
     dedupe_parser.set_defaults(func=dedupe_uploads)
+
+    transform_parser = subparsers.add_parser(
+        "transform",
+        help="Perspective-correct rectangular images with a vision model and OpenCV.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_common_upload_args(transform_parser)
+    transform_parser.add_argument(
+        "--provider",
+        choices=["openai", "gemma", "qwen"],
+        default="openai",
+        help="Vision model provider for routing and crop review.",
+    )
+    transform_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=transform.DEFAULT_MAX_ATTEMPTS,
+        help="Maximum crop attempts for each image.",
+    )
+    transform_parser.add_argument(
+        "--preview", action=argparse.BooleanOptionalAction, default=True
+    )
+    transform_parser.set_defaults(func=transform_uploads)
 
     tag_parser = subparsers.add_parser(
         "tag", help="Tag upload images with a vision model."
