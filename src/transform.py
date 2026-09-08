@@ -249,12 +249,18 @@ def detect_crop(
         "contour": normalize(contour_corners),
         "hough": normalize(hough_corners),
     }
+    vlm_images = [
+        source,
+        _draw_quadrilateral(source, contour_corners),
+        _draw_quadrilateral(source, hough_corners),
+    ]
+    if max(source.size) > 1200:
+        vlm_images = [
+            it.resize_image_to_fit(image, max_dimension=1000)
+            for image in vlm_images
+        ]
     result = client.vision_task(
-        [
-            it.base64_encode_image(source),
-            it.base64_encode_image(_draw_quadrilateral(source, contour_corners)),
-            it.base64_encode_image(_draw_quadrilateral(source, hough_corners)),
-        ],
+        [it.base64_encode_image(image) for image in vlm_images],
         CROP_VLM_PROMPT.format(guesses_json=json.dumps(guesses, indent=2)),
         CropVlmDecision,
     )

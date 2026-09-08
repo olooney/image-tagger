@@ -327,6 +327,26 @@ def test_transform_images_dry_run_only_writes_debug_report(tmp_path: Path) -> No
     assert (tmp_path / transform.TRANSFORM_REVIEW_FILENAME).is_file()
 
 
+def test_transform_images_downsamples_large_vlm_inputs(tmp_path: Path) -> None:
+    """Send large source images and overlays to the VLM at a bounded size."""
+    source_path = tmp_path / "book.png"
+    Image.new("RGB", (2400, 1200), "white").save(source_path)
+    client = MockTransformClientAdapter()
+
+    transform.transform_images(
+        tmp_path,
+        client_adapter=client,
+        verbose=0,
+        dry_run=True,
+    )
+
+    assert len(client.calls) == 1
+    payloads = client.calls[0]
+    assert isinstance(payloads, list)
+    sizes = [Image.open(BytesIO(base64.b64decode(payload))).size for payload in payloads]
+    assert sizes == [(1000, 500)] * 3
+
+
 def test_transform_images_skips_full_image_crop(tmp_path: Path) -> None:
     """Avoid resampling an image when the VLM returns its full frame."""
     source_path = tmp_path / "book.png"
