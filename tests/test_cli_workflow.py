@@ -2328,7 +2328,15 @@ def test_review_cli_passes_provider_and_verbose(
 
     monkeypatch.setattr(review_app, "review_metadata", fake_review_metadata)
 
-    run_cli("review", str(uploads_dir), "--provider", "qwen", "-v")
+    run_cli(
+        "review",
+        str(uploads_dir),
+        "--provider",
+        "qwen",
+        "--filename",
+        "sample-*.jpg",
+        "-v",
+    )
 
     assert calls == [
         {
@@ -2336,6 +2344,7 @@ def test_review_cli_passes_provider_and_verbose(
             "stackmap": write_test_stackmap(uploads_dir),
             "provider": "qwen",
             "verbose": 2,
+            "filename_glob": "sample-*.jpg",
         }
     ]
 
@@ -2397,6 +2406,44 @@ def test_review_metadata_creates_blank_rows_for_all_directory_images(
     assert response.text.count('name="clean_filename" class="form-control" value=""') == 3
     assert response.text.count('<option value="" selected></option>') == 6
     assert '<span class="image-dimensions"><span class="filename-mismatch">2001</span>x<span>3</span></span>' in response.text
+
+
+def test_review_metadata_filters_images_by_filename_glob(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show only existing metadata rows matching the filename glob."""
+    Image.new("RGB", (8, 8), "red").save(tmp_path / "book-cover.jpg")
+    Image.new("RGB", (8, 8), "blue").save(tmp_path / "poster.jpg")
+    metadata_filename = tmp_path / "image_metadata.csv"
+    monkeypatch.setattr(review_app.webbrowser, "open", lambda *args, **kwargs: None)
+
+    import uvicorn
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    with pytest.raises(KeyboardInterrupt):
+        review_app.review_metadata(
+            metadata_filename,
+            stackmap=write_test_stackmap(tmp_path),
+        )
+
+    metadata_df = pd.read_csv(metadata_filename, keep_default_na=False)
+    assert metadata_df["original_filename"].tolist() == ["book-cover.jpg", "poster.jpg"]
+
+    with pytest.raises(KeyboardInterrupt):
+        review_app.review_metadata(
+            metadata_filename,
+            stackmap=write_test_stackmap(tmp_path),
+            filename_glob="book-*.jpg",
+        )
+
+    response = TestClient(review_app.app).get("/")
+    assert "book-cover.jpg" in response.text
+    assert "poster.jpg" not in response.text
 
 
 def test_gallery_cli_defaults_output_to_selected_directory(

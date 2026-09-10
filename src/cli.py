@@ -264,6 +264,7 @@ def review_uploads(args: argparse.Namespace) -> None:
         stackmap=args.stackmap_config,
         provider=args.provider,
         verbose=args.verbose,
+        filename_glob=args.filename,
     )
 
 
@@ -465,6 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["openai", "gemma", "qwen"],
         default="openai",
         help="Vision model provider for interactive crop review.",
+    )
+    review_parser.add_argument(
+        "--filename",
+        help="Review only images whose filename matches this glob.",
     )
     review_parser.set_defaults(func=review_uploads)
 

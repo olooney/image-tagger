@@ -1,3 +1,4 @@
+import fnmatch
 import html
 import json
 import logging
@@ -70,12 +71,14 @@ def set_review_metadata(
     stackmap: StackMap,
     provider: it.VisionModelProvider | str = it.VisionModelProvider.OPENAI,
     verbose: int = 1,
+    filename_glob: str | None = None,
 ) -> None:
     """Set the metadata file used by the review app."""
     app.state.metadata_path = Path(metadata_filename)
     app.state.stackmap = stackmap
     app.state.provider = it.VisionModelProvider(provider)
     app.state.verbose = verbose
+    app.state.filename_glob = filename_glob
 
 
 def review_metadata_path() -> Path:
@@ -105,6 +108,11 @@ def review_provider() -> it.VisionModelProvider:
 def review_verbose() -> int:
     """Return the configured review verbosity."""
     return cast("int", getattr(app.state, "verbose", 1))
+
+
+def review_filename_glob() -> str | None:
+    """Return the configured review filename glob."""
+    return cast("str | None", getattr(app.state, "filename_glob", None))
 
 
 def first_available_port(start_port: int = 8001) -> int:
@@ -350,6 +358,12 @@ def review_items(metadata_path: Path) -> list[dict[str, Any]]:
 
         image_path = current_image_path(pd.Series(item))
         if image_path is None:
+            continue
+        filename_glob = review_filename_glob()
+        if filename_glob is not None and not fnmatch.fnmatch(
+            image_path.name,
+            filename_glob,
+        ):
             continue
 
         relative_path = os.path.relpath(image_path, metadata_path.parent)
@@ -682,6 +696,7 @@ def review_metadata(
     stackmap: StackMap,
     provider: it.VisionModelProvider | str = it.VisionModelProvider.OPENAI,
     verbose: int = 1,
+    filename_glob: str | None = None,
     start_port: int = 8001,
 ) -> None:
     """Serve a local metadata review app and open it in a browser."""
@@ -690,6 +705,12 @@ def review_metadata(
     metadata_path = Path(metadata_filename)
     it.ensure_metadata_review_ids(metadata_path)
     image_paths = review_directory_images(metadata_path.parent)
+    if filename_glob is not None:
+        image_paths = [
+            image_path
+            for image_path in image_paths
+            if fnmatch.fnmatch(image_path.name, filename_glob)
+        ]
     if not image_paths:
         print(f"No images found in {metadata_path.parent}.")
         return
@@ -700,6 +721,7 @@ def review_metadata(
         stackmap,
         provider=provider,
         verbose=verbose,
+        filename_glob=filename_glob,
     )
     port = first_available_port(start_port)
     url = f"http://127.0.0.1:{port}"
