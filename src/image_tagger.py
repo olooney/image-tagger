@@ -2111,7 +2111,6 @@ def generate_wall(
 
         # calculate how like it is the grid will form a perfect rectangle
         # if a random width is chosen from a reasonable range
-        cell_count = 1080
         DIVISOR_RANGE = 20
         n_divisors = 1
         for width in range(2, DIVISOR_RANGE + 1):
