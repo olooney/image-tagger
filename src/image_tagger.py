@@ -2106,7 +2106,24 @@ def generate_wall(
     )
     output_path.write_text(output, encoding="utf-8")
     if verbose >= 1:
+        double_wide_count = sum(1 for item in items if item["is_double_wide"])
+        cell_count = len(items) + double_wide_count
+
+        # calculate how like it is the grid will form a perfect rectangle
+        # if a random width is chosen from a reasonable range
+        cell_count = 1080
+        DIVISOR_RANGE = 20
+        n_divisors = 1
+        for width in range(2, DIVISOR_RANGE + 1):
+            if cell_count % width == 0:
+                n_divisors += 1
+        divisibility_percentage = 100 * n_divisors / DIVISOR_RANGE
+
         print(f"wrote {quote_display_path(output_path)}")
+        print(
+            f"{len(items)} images + "
+            f"{double_wide_count} double-wide = {cell_count} ({divisibility_percentage}%)"
+        )
     return output_path
 
 

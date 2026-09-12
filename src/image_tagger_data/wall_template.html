@@ -146,10 +146,12 @@
         const searchPanel = document.querySelector('.search-panel');
         const searchInput = searchPanel.querySelector('input');
         const searchCloseButton = searchPanel.querySelector('.search-close');
+        const wall = document.querySelector('.wall');
         const lightbox = document.querySelector('.lightbox');
         const lightboxImage = lightbox.querySelector('img');
         const tiles = Array.from(document.querySelectorAll('.tile'));
-        let activeTileIndex = -1;
+        let activeTile = null;
+        let resizeFrame = 0;
 
         const ASCII_EQUIVALENTS = {
             'ß': 'ss',
@@ -207,6 +209,50 @@
                     terms.length > 0 && !terms.every((term) => searchText.includes(term)),
                 );
             });
+            arrangeTiles();
+        };
+
+        const getColumnCount = () => getComputedStyle(wall)
+            .gridTemplateColumns
+            .split(' ')
+            .filter(Boolean)
+            .length;
+
+        const arrangeTiles = () => {
+            tiles.forEach((tile) => wall.append(tile));
+            const columnCount = getColumnCount();
+            if (columnCount < 2) {
+                return;
+            }
+
+            const visibleTiles = tiles.filter((tile) => !tile.classList.contains('is-hidden'));
+            const arrangedTiles = [...visibleTiles];
+            let realIndex = 0;
+            arrangedTiles.forEach((tile, index) => {
+                const isDoubleWide = tile.classList.contains('double-wide');
+                realIndex += isDoubleWide ? 2 : 1;
+
+                if (realIndex % columnCount === 1 && isDoubleWide) {
+                    for (let otherIndex = index - 1; otherIndex >= Math.max(0, index - 5); otherIndex -= 1) {
+                        const otherTile = arrangedTiles[otherIndex];
+                        if (!otherTile.classList.contains('double-wide')) {
+                            arrangedTiles[index] = otherTile;
+                            arrangedTiles[otherIndex] = tile;
+                            break;
+                        }
+                    }
+                }
+            });
+
+            arrangedTiles.forEach((tile) => wall.append(tile));
+            tiles
+                .filter((tile) => tile.classList.contains('is-hidden'))
+                .forEach((tile) => wall.append(tile));
+        };
+
+        const arrangeTilesOnResize = () => {
+            cancelAnimationFrame(resizeFrame);
+            resizeFrame = requestAnimationFrame(arrangeTiles);
         };
 
         const openSearch = () => {
@@ -222,9 +268,9 @@
             searchInput.blur();
         };
 
-        const openLightbox = (tileIndex) => {
-            const image = tiles[tileIndex].querySelector('img');
-            activeTileIndex = tileIndex;
+        const openLightbox = (tile) => {
+            const image = tile.querySelector('img');
+            activeTile = tile;
             lightboxImage.src = image.currentSrc || image.src;
             lightboxImage.alt = image.alt;
             lightbox.classList.add('is-open');
@@ -233,19 +279,16 @@
         const closeLightbox = () => {
             lightbox.classList.remove('is-open');
             lightboxImage.removeAttribute('src');
-            activeTileIndex = -1;
+            activeTile = null;
         };
 
         const moveLightbox = (direction) => {
-            const visibleTileIndexes = tiles
-                .map((tile, index) => ({ tile, index }))
-                .filter(({ tile }) => !tile.classList.contains('is-hidden'))
-                .map(({ index }) => index);
-            const currentIndex = visibleTileIndexes.indexOf(activeTileIndex);
-            const nextIndex = (currentIndex + direction + visibleTileIndexes.length) % visibleTileIndexes.length;
+            const visibleTiles = Array.from(wall.querySelectorAll('.tile:not(.is-hidden)'));
+            const currentIndex = visibleTiles.indexOf(activeTile);
+            const nextIndex = (currentIndex + direction + visibleTiles.length) % visibleTiles.length;
 
-            if (visibleTileIndexes.length > 0) {
-                openLightbox(visibleTileIndexes[nextIndex]);
+            if (visibleTiles.length > 0) {
+                openLightbox(visibleTiles[nextIndex]);
             }
         };
 
@@ -282,9 +325,13 @@
             }
         });
 
-        document.querySelectorAll('.tile img').forEach((image, index) => {
+        window.addEventListener('resize', arrangeTilesOnResize);
+
+        arrangeTiles();
+
+        document.querySelectorAll('.tile img').forEach((image) => {
             image.addEventListener('click', () => {
-                openLightbox(index);
+                openLightbox(image.closest('.tile'));
             });
         });
 

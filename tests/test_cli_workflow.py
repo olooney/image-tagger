@@ -2527,7 +2527,10 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
 
     wall_filename = uploads_dir / "index.html"
     html = wall_filename.read_text(encoding="utf-8")
-    assert output == f"wrote {quote_display_path(wall_filename)}\n"
+    assert output == (
+        f"wrote {quote_display_path(wall_filename)}\n"
+        "3 images + 1 double-wide = 1080 (65.0%)\n"
+    )
     assert wall_filename.exists()
     assert html.startswith("<!doctype html>")
     assert "<title>Book Wall</title>" in html
@@ -2560,6 +2563,9 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "lightbox.classList.remove('is-open')" in html
     assert "event.key === 'ArrowLeft'" in html
     assert "event.key === 'ArrowRight'" in html
+
+    quiet_output = run_cli("wall", str(uploads_dir), "--no-preview", "-q")
+    assert quiet_output == ""
 
 
 def test_wall_cli_uses_exif_orientation_and_reweighted_cell_aspect_ratio(
