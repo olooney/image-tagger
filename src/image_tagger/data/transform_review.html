@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Perspective Transform Review</title>
+    <style>
+        body { margin: 0; color: #1f2933; background: #f5f4ef; font-family: Georgia, serif; }
+        header { padding: 1rem 2rem; color: #fff; background: #174c42; }
+        main { max-width: 1900px; margin: 2rem auto; padding: 0 1rem; }
+        article { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid #b8b6ae; }
+        figure { margin: 0; min-width: 0; }
+        .image-frame { display: flex; align-items: center; justify-content: center; height: min(720px, 140vw); background: #d9d7cf; }
+        .image-frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
+        figcaption { margin-top: .5rem; font-family: sans-serif; font-size: .9rem; overflow-wrap: anywhere; }
+        .details { grid-column: 1 / -1; font-family: sans-serif; }
+        .status { font-weight: 700; color: #174c42; }
+        .details p { margin: .5rem 0 0; overflow-wrap: anywhere; }
+        @media (max-width: 1000px) { article { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 600px) { article { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <header><h1>Perspective Transform Review</h1></header>
+    <main>
+        {% for entry in entries %}
+            <article>
+                <figure><div class="image-frame"><img src="{{ entry.hough_image_src }}" alt="Hough crop guess"></div><figcaption>Hough guess: {{ entry.source_path.name }}</figcaption></figure>
+                <figure><div class="image-frame"><img src="{{ entry.contour_image_src }}" alt="Contour crop guess"></div><figcaption>Contour guess</figcaption></figure>
+                <figure><div class="image-frame"><img src="{{ entry.vlm_image_src }}" alt="VLM crop guess"></div><figcaption>VLM guess</figcaption></figure>
+                <figure><div class="image-frame">{% if entry.transformed_image_src %}<img src="{{ entry.transformed_image_src }}" alt="Final perspective crop">{% endif %}</div><figcaption>Final crop</figcaption></figure>
+                <div class="details">
+                    <span class="status">{{ entry.status }}</span>
+                    <p><strong>VLM selected:</strong> {{ entry.which }}</p>
+                    <p><strong>Adjustments:</strong> {{ entry.adjustments }}</p>
+                </div>
+            </article>
+        {% else %}
+            <p>No candidate images found.</p>
+        {% endfor %}
+    </main>
+</body>
+</html>

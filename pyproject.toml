@@ -1,7 +1,7 @@
 [project]
 
 name = "image-tagger"
-version = "1.1.0"
+version = "1.2.0"
 description = "Tag, categorize, and clean up images with vision models."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -31,20 +31,24 @@ dependencies = [
     "uvicorn>=0.35.0",
     "pytest-cov>=7.1.0",
     "opencv-python-headless>=5.0.0.93",
+    "scipy>=1.18.1",
+    "scikit-learn>=1.9.1",
 ]
+
+[project.scripts]
+image-tagger = "image_tagger.cli:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
 [tool.setuptools]
-py-modules = ["cli", "constants", "convert", "image_tagger", "review_app", "stackmap", "transform", "util"]
-packages = ["image_tagger_data"]
+packages = ["image_tagger", "image_tagger.data"]
 
 [tool.setuptools.package-dir]
 "" = "src"
 
 [tool.setuptools.package-data]
-image_tagger_data = ["*"]
+"image_tagger.data" = ["*"]
 
 [tool.ruff.lint]
 select = [

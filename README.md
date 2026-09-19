@@ -37,58 +37,58 @@ CLI Usage
 You will need to put your OpenAI API key in the usual `OPENAI_API_KEY`
 environment variable.
 
-The upload workflow is available through `just` tasks. TO preprocess,
+To preprocess,
 tag, and do human-in-the-loop review of new images, do:
 
 ```bash
-just convert [DIRECTORY]  # normalize image extensions and metadata
-just tag [DIRECTORY]      # Have a VLM infer tags, categories, clean filenames, etc.
-just rename [DIRECTORY]   # renamed image files to VLM-inferred filenames
-just quad [DIRECTORY]     # fill in missing perspective-corner metadata for tagged images
-just review [DIRECTORY]   # open interactive HTMX review app
+image-tagger convert [DIRECTORY]  # normalize image extensions and metadata
+image-tagger tag [DIRECTORY]      # Have a VLM infer tags, categories, clean filenames, etc.
+image-tagger rename [DIRECTORY]   # renamed image files to VLM-inferred filenames
+image-tagger quad [DIRECTORY]     # fill in missing perspective-corner metadata for tagged images
+image-tagger review [DIRECTORY]   # open interactive HTMX review app
 ```
 
-Or just run this command to do all five in sequence:
+Or run this command to do all five in sequence:
 
 ```bash
-just run [DIRECTORY] [OPTIONS]
+image-tagger run [DIRECTORY] [OPTIONS]
 ```
 
-`just run` passes its directory and options shared by the workflow commands to
-`convert`, `tag`, `rename`, and `review`; for example, use `just run uploads -vv`
+`image-tagger run` passes its directory and options shared by the workflow commands to
+`convert`, `tag`, `rename`, and `review`; for example, use `image-tagger run uploads -vv`
 for detailed output throughout the workflow.
 
 Next, you can run these individually as needed:
 
 ```bash
-just clip [DIRECTORY]     # automatically detect and fix perspective skew
-just shelve [DIRECTORY]   # distribute files across configured directories
-just dedupe [DIRECTORY]   # identify and automatically remove duplicates
-just wall [DIRECTORY]     # generate a mood-board-style image wall
-just gallery [DIRECTORY]  # show images and details side-by-side
-just report [DIRECTORY]   # summary statistics and problems
-just prune [DIRECTORY]    # clean up meta data
+image-tagger clip [DIRECTORY]     # automatically detect and fix perspective skew
+image-tagger shelve [DIRECTORY]   # distribute files across configured directories
+image-tagger dedupe [DIRECTORY]   # identify and automatically remove duplicates
+image-tagger wall [DIRECTORY]     # generate a mood-board-style image wall
+image-tagger gallery [DIRECTORY]  # show images and details side-by-side
+image-tagger report [DIRECTORY]   # summary statistics and problems
+image-tagger prune [DIRECTORY]    # clean up meta data
 ```
 
-For detailed CLI instructions, run `just` without any arguments to get a
-list of justfile tasks, then use `--help` to see the
+For detailed CLI instructions, run `image-tagger --help`, then use
+subcommand help to see the
 full list of CLI arguments and options for a given command:
 
 ```bash
-just COMMAND --help
+image-tagger COMMAND --help
 ```
 
 
 Command Details
 ---------------
 
-`just convert` prepares uploads for tagging. It corrects image extensions when
+`image-tagger convert` prepares uploads for tagging. It corrects image extensions when
 the file contents do not match the name, converts lossless or uncompressed
 formats such as BMP and GIF to PNG, converts lossy formats such as WEBP, AVIF,
 and HEIC to JPEG, and normalizes `.jpeg` filenames to `.jpg`.
 
 Pass `-w` or `--welcome-extensions` with a comma-delimited list to replace the
-default welcome formats, such as `just convert uploads -w jpg` to convert every
+default welcome formats, such as `image-tagger convert uploads -w jpg` to convert every
 other supported format to JPEG.
 
 Every command uses a `.stackmap` configuration file. The CLI searches upward
@@ -112,24 +112,24 @@ authoritative category list passed to the vision model. Metadata is written to
 
 Every `DIRECTORY` argument also accepts a shelf alias. Aliases take precedence
 over same-named local directories, while unknown names remain local relative
-paths. For example, `just dedupe books` uses the configured `books` shelf, and
-`just dedupe ghosts` uses `./ghosts` when `ghosts` is not configured.
+paths. For example, `image-tagger dedupe books` uses the configured `books` shelf, and
+`image-tagger dedupe ghosts` uses `./ghosts` when `ghosts` is not configured.
 
-`just tag` applies a vision language model (VLM) to tag and categorize images
+`image-tagger tag` applies a vision language model (VLM) to tag and categorize images
 in a structured dataset. It also determines a clean filename for each image
 according to internal naming conventions. Multiple model providers are supported
 ([Download example CSV](https://olooney.github.io/image-tagger/docs/example/image_metadata.csv)).
 
-`just quad` calculates missing `quad` values for existing images with successful
+`image-tagger quad` calculates missing `quad` values for existing images with successful
 tag metadata. It skips rows whose files are missing or whose `quad` value is
 already populated.
 
-`just clip` automatically applies a perspective transform to orthorectify (unskew) images.
+`image-tagger clip` automatically applies a perspective transform to orthorectify (unskew) images.
 It determines the correct transform using a combination of traditional computer vision
 techniques (Hough transforms and largest-quadrilateral contour detection) and a VLM
 ([example](https://olooney.github.io/image-tagger/docs/example/transform_review.html)).
 
-`just review` pulls up an interactive HTMX app to review and correct the
+`image-tagger review` pulls up an interactive HTMX app to review and correct the
 inferred tags and filenames. The review tool also allows you to shelve or delete
 images during the review process.
 
@@ -140,27 +140,27 @@ automatically or manually apply perspective transforms to images.
 
 ![Interactive crop and perspective tool](docs/crop_tool_screenshot.png)
 
-`just shelve` moves images into separate directories based on their inferred
+`image-tagger shelve` moves images into separate directories based on their inferred
 (and human-reviewed) categories.
 
-`just dedupe` removes duplicate images under `DIRECTORY`. CLIP scores at or
+`image-tagger dedupe` removes duplicate images under `DIRECTORY`. CLIP scores at or
 above `--automatic-threshold` are removed automatically; scores at or above
 `--llm-threshold` are confirmed by the selected vision model before removal.
 It maintains a cache of already compared images to avoid doing the full $O(n^2)$
 comparison each time
 ([example](https://olooney.github.io/image-tagger/docs/example/dedupe_review.html)).
 
-`just wall` creates an `index.html` image wall directly from every supported image
+`image-tagger wall` creates an `index.html` image wall directly from every supported image
 under `DIRECTORY`. It uses relative image paths, computes a median image aspect
 ratio up front, and displays the images in equal-sized grid cells with a
 click-to-open full-size overlay
 ([example](https://olooney.github.io/image-tagger/docs/example/wall.html)).
 
-`just gallery` produces a static HTML version of the review tool showing the
+`image-tagger gallery` produces a static HTML version of the review tool showing the
 image and its inferred metadata side-by-side
 ([example](https://olooney.github.io/image-tagger/docs/example/gallery.html)).
 
-`just report` prints image totals, metadata breakdowns, outstanding metadata and
+`image-tagger report` prints image totals, metadata breakdowns, outstanding metadata and
 dedupe work, filename cleanup gaps, and the largest images in `DIRECTORY`.
 It shows images larger than 1 MB by default; use `--large-image-threshold` with
 values such as `500k` or `2 MB` to change that limit.
@@ -185,10 +185,10 @@ You can also generate an `image_metadata.csv` file for a given directory of
 images from Python like so:
 
 ```python
-import image_tagger as it
+from image_tagger.tagging import find_images, tag_images
 
-filepaths = it.find_images(image_dir)
-it.tag_images(filepaths, metadata_filename)
+filepaths = find_images(image_dir)
+tag_images(filepaths, metadata_filename)
 ```
 
 This file contains descriptions, tags, and other metadata that a vision model can
@@ -200,13 +200,17 @@ To automatically rename all the images listed in the CSV to their suggested
 clean filenames, you can use:
 
 ```python
-it.rename_images(metadata_filename, verbose=1, dry_run=False)
+from image_tagger.shelve import rename_images
+
+rename_images(metadata_filename, verbose=1, dry_run=False)
 ```
 
 Finally, with a `StackMap` loaded from your `.stackmap`, run:
 
 ```python
-it.generate_gallery(metadata_filename, gallery_filename)
+from image_tagger.gallery import generate_gallery
+
+generate_gallery(metadata_filename, gallery_filename)
 ```
 
 to generate a static `index.html` file which shows each image listed in
@@ -218,23 +222,33 @@ To move renamed images into sibling directories matching the tagged category,
 such as `../books/`, create those directories first and run:
 
 ```python
-it.shelve_images(metadata_filename, stackmap=stackmap, verbose=1, dry_run=False)
+from image_tagger.shelve import shelve_images
+
+shelve_images(metadata_filename, stackmap=stackmap, verbose=1, dry_run=False)
 ```
 
 Source
 ------
 
-This [Jupyter notebook](https://github.com/olooney/image-tagger/blob/main/notebooks/Image%20Tagger%20Test.ipynb)
-contains a usage example, including test-image generation by scrambling
-filenames and several summary visualizations.
+The package uses focused modules by workflow area, plus a smaller
+`scramble.py` module for scramble and image-copy helpers:
 
-The main
-[`image_tagger.py`](https://github.com/olooney/image-tagger/blob/main/src/image_tagger.py)
-contains the core tagging, renaming, shelving, and gallery code. The default
-vision-model instructions live in
-[`image_prompt.md`](https://github.com/olooney/image-tagger/blob/main/src/image_tagger_data/image_prompt.md)
-and are loaded as `IMAGE_PROMPT_TEMPLATE`. Pass `--instructions-filename` on
-the CLI, or `instructions_filename` from Python, to use a different prompt
-template without editing the package data. The `csv_columns` variable contains
-the names and order of the columns of the generated `image_metadata.csv` file.
+* `tagging.py`: vision tagging, metadata schema, and CSV updates.
+* `dedupe.py`: duplicate-review workflow and removal report generation.
+* `gallery.py`: static metadata gallery rendering.
+* `wall.py`: layout inference and image-wall rendering.
+* `compare.py`: CLIP embeddings, similarity, and duplicate matching.
+* `report.py`: collection summaries and consistency checks.
+* `vision.py`: model-provider adapters and response wrappers.
+* `transform.py`: CV plus VLM perspective-correction workflow.
+* `scramble.py`: filename scrambling and copy helpers.
+* `shelve.py`: metadata-driven rename, prune, and shelving actions.
 
+The default vision-model instructions live in
+`image_tagger/data/image_prompt.md`
+and are loaded as `IMAGE_PROMPT_TEMPLATE` from `tagging.py`. Pass
+`--instructions-filename` on the CLI, or `instructions_filename` from Python,
+to use a different prompt template without editing package data.
+
+The `csv_columns` variable (alias of `CSV_COLUMNS` in `constants.py`) contains
+the names and order of the columns in the generated `image_metadata.csv` file.
