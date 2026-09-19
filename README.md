@@ -156,6 +156,11 @@ ratio up front, and displays the images in equal-sized grid cells with a
 click-to-open full-size overlay
 ([example](https://olooney.github.io/image-tagger/docs/example/wall.html)).
 
+Experimental: use `--order grid` with `wall` to arrange the wall by CLIP similarity.
+This attempts to put semantically related images close together. Whether this results
+in more or less interesting image walls is debatable, but clusters are apparent in
+the output.
+
 `image-tagger gallery` produces a static HTML version of the review tool showing the
 image and its inferred metadata side-by-side
 ([example](https://olooney.github.io/image-tagger/docs/example/gallery.html)).

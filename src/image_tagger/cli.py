@@ -10,6 +10,7 @@ from .constants import (
     DEFAULT_AUTOMATIC_THRESHOLD,
     DEFAULT_LARGE_IMAGE_THRESHOLD,
     DEFAULT_LLM_THRESHOLD,
+    DEFAULT_WALL_ASSUMED_COLUMNS,
     DEFAULT_WALL_RANDOM_SEED,
     GALLERY_NAME,
     IMAGE_EXTENSIONS,
@@ -84,6 +85,14 @@ def file_size_arg(value: str) -> int:
     if size <= 0:
         raise argparse.ArgumentTypeError("File size must be greater than zero.")
     return size
+
+
+def positive_int_arg(value: str) -> int:
+    """Parse a positive integer argument."""
+    parsed_value = int(value)
+    if parsed_value < 1:
+        raise argparse.ArgumentTypeError("Value must be greater than zero.")
+    return parsed_value
 
 
 def convert(args: argparse.Namespace) -> None:
@@ -271,6 +280,7 @@ def wall(args: argparse.Namespace) -> None:
         seed=args.seed,
         title=args.title,
         double_wide_threshold=args.double_wide_threshold,
+        assume_columns=args.assume_columns,
         verbose=args.verbose,
     )
     if args.preview:
@@ -520,9 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
     wall_parser.add_argument("--output-filename", type=path_arg)
     wall_parser.add_argument(
         "--order",
-        choices=["name", "date", "random"],
+        choices=["name", "date", "random", "grid"],
         default="random",
-        help="Order wall images by name, newest date first, or a random shuffle (default).",
+        help="Order wall images by name, newest date first, random shuffle (default), or CLIP similarity grid.",
     )
     wall_parser.add_argument(
         "--seed",
@@ -539,6 +549,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=WALL_DOUBLE_WIDE_THRESHOLD,
         help="Mark images this many times wider than a cell as double-wide.",
+    )
+    wall_parser.add_argument(
+        "--assume-columns",
+        type=positive_int_arg,
+        default=DEFAULT_WALL_ASSUMED_COLUMNS,
+        help=f"Assume this many columns when computing grid order. Defaults to {DEFAULT_WALL_ASSUMED_COLUMNS}.",
     )
     wall_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True

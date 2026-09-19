@@ -67,7 +67,7 @@ from image_tagger.vision import (
     VisionModelProvider,
     VisionTaskResult,
 )
-from image_tagger.wall import infer_wall_layout, paths_with_mtime
+from image_tagger.wall import clip_grid_wall_order, infer_wall_layout, paths_with_mtime
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 TEST_STACKMAP_TEMPLATE: Path = REPO_ROOT / "tests" / ".stackmap"
@@ -2750,6 +2750,90 @@ def test_wall_cli_orders_images_by_date_newest_first(
 
     html = (uploads_dir / "index.html").read_text(encoding="utf-8")
     assert html.index('src="a-newer.jpg"') < html.index('src="z-older.jpg"')
+
+
+def test_clip_grid_wall_order_budgets_double_wide_and_empty_cells(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use two slots for wide images and remove padded grid entries."""
+    filepaths = [
+        tmp_path / "alpha.jpg",
+        tmp_path / "bravo.jpg",
+        tmp_path / "charlie.jpg",
+        tmp_path / "delta.jpg",
+    ]
+    captured_vectors: list[np.ndarray] = []
+
+    def fake_embed_image_paths(paths: list[Path], **_: object) -> np.ndarray:
+        return np.arange(len(paths) * 3, dtype=float).reshape(len(paths), 3) + 1
+
+    def fake_arrange_clip_grid(
+        vectors: np.ndarray,
+        *,
+        rows: int,
+        cols: int,
+        perplexity: float,
+    ) -> np.ndarray:
+        captured_vectors.append(vectors)
+        assert (rows, cols, perplexity) == (2, 3, 5.0)
+        return np.array([[5, 4, 3], [2, 1, 0]])
+
+    monkeypatch.setattr("image_tagger.wall.embed_image_paths", fake_embed_image_paths)
+    monkeypatch.setattr("image_tagger.wall.arrange_clip_grid", fake_arrange_clip_grid)
+
+    ordered = clip_grid_wall_order(
+        filepaths,
+        {filepaths[1]},
+        tmp_path,
+        assume_columns=3,
+    )
+
+    assert captured_vectors[0].shape == (6, 3)
+    assert ordered == [filepaths[0], filepaths[3], filepaths[2], filepaths[1]]
+
+
+def test_wall_cli_orders_images_by_clip_grid(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route the grid order mode through CLIP wall ordering."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    for filename in ["alpha.jpg", "bravo.jpg", "charlie.jpg"]:
+        Image.new("RGB", (100, 100)).save(uploads_dir / filename)
+
+    def reverse_grid_order(
+        filepaths: list[Path],
+        double_wide_paths: set[Path],
+        directory: Path,
+        assume_columns: int,
+        verbose: int,
+    ) -> list[Path]:
+        assert not double_wide_paths
+        assert directory == uploads_dir
+        assert assume_columns == 2
+        assert verbose == 1
+        return list(reversed(filepaths))
+
+    monkeypatch.setattr(
+        "image_tagger.wall.clip_grid_wall_order",
+        reverse_grid_order,
+    )
+
+    run_cli(
+        "wall",
+        str(uploads_dir),
+        "--order",
+        "grid",
+        "--assume-columns",
+        "2",
+        "--no-preview",
+    )
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    assert wall_image_srcs(html) == ["charlie.jpg", "bravo.jpg", "alpha.jpg"]
 
 
 def test_wall_cli_random_order_accepts_seed(

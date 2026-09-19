@@ -1,4 +1,5 @@
 import hashlib
+import math
 import os
 import random
 import re
@@ -8,14 +9,20 @@ from pathlib import Path
 from typing import Any, cast
 
 import jinja2
+import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
 
+from .compare import embed_image_paths
 from .constants import (
+    CLIP_MODEL,
+    DEFAULT_WALL_ASSUMED_COLUMNS,
+    DEDUPE_EMBEDDINGS_FILENAME,
     WALL_DOUBLE_WIDE_THRESHOLD,
     WALL_LAYOUT_MAX_PASSES,
     WALL_TITLE_TEMPLATE,
 )
+from .grid import arrange_clip_grid
 from .util import Pathish, quote_display_path
 
 
@@ -95,6 +102,55 @@ def seeded_wall_sort_key(
     return hashlib.blake2b(key_text, digest_size=16).digest(), relative_filepath
 
 
+def clip_grid_wall_order(
+    filepaths: list[Path],
+    double_wide_paths: set[Path],
+    directory: Path,
+    assume_columns: int = DEFAULT_WALL_ASSUMED_COLUMNS,
+    verbose: int = 1,
+) -> list[Path]:
+    """Order wall paths on a fixed-width CLIP similarity grid."""
+    if len(filepaths) < 2:
+        return filepaths
+    if assume_columns < 1:
+        raise ValueError("assume_columns must be positive.")
+
+    vectors = embed_image_paths(
+        filepaths,
+        verbose=verbose,
+        cache_filename=directory / DEDUPE_EMBEDDINGS_FILENAME,
+        cache_key=CLIP_MODEL,
+    )
+    vector_by_path = dict(zip(filepaths, vectors, strict=True))
+    expanded_paths = [
+        filepath
+        for filepath in filepaths
+        for _ in range(2 if filepath in double_wide_paths else 1)
+    ]
+    expanded_vectors = [vector_by_path[filepath] for filepath in expanded_paths]
+
+    cols = assume_columns
+    rows = math.ceil(len(expanded_paths) / cols)
+    while len(expanded_paths) < rows * cols:
+        expanded_paths.append(expanded_paths[0])
+        expanded_vectors.append(expanded_vectors[0])
+
+    grid = arrange_clip_grid(
+        np.asarray(expanded_vectors),
+        rows=rows,
+        cols=cols,
+        perplexity=min(30.0, len(expanded_paths) - 1),
+    )
+    ordered_paths: list[Path] = []
+    seen_paths: set[Path] = set()
+    for index in grid.flat:
+        filepath = expanded_paths[int(index)]
+        if filepath not in seen_paths:
+            ordered_paths.append(filepath)
+            seen_paths.add(filepath)
+    return ordered_paths
+
+
 def singular_wall_title_word(word: str) -> str:
     """Return a simple singular display form for a wall title word."""
     if len(word) > 3 and word.endswith("ies"):
@@ -157,6 +213,7 @@ def generate_wall(
     seed: int | None = None,
     title: str | None = None,
     double_wide_threshold: float = WALL_DOUBLE_WIDE_THRESHOLD,
+    assume_columns: int = DEFAULT_WALL_ASSUMED_COLUMNS,
     verbose: int = 1,
 ) -> Path:
     """Generate a static image wall HTML file."""
@@ -188,13 +245,21 @@ def generate_wall(
                     directory_path, filepath, seed
                 )
             )
-    else:
+    elif order != "grid":
         raise ValueError(f"Unsupported wall order: {order}")
     aspect_ratios = image_aspect_ratios(filepaths)
     aspect_ratio, double_wide_paths = infer_wall_layout(
         aspect_ratios,
         double_wide_threshold,
     )
+    if order == "grid":
+        filepaths = clip_grid_wall_order(
+            filepaths,
+            double_wide_paths,
+            directory_path,
+            assume_columns,
+            verbose,
+        )
     cell_width = 200
     cell_height = round(cell_width / aspect_ratio)
     metadata_titles = wall_metadata_titles(metadata_filename)
