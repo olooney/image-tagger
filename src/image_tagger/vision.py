@@ -147,6 +147,8 @@ class OllamaVisionModelClientAdapter(VisionModelClientAdapter):
                 "temperature": 0,
                 "image_min_tokens": 1120,
                 "image_max_tokens": 1120,
+                "num_ctx": 16384,
+                "num_predict": 8192,
             },
         )
         message = response.get("message", {})

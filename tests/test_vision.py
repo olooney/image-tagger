@@ -1,5 +1,7 @@
 from typing import cast
 
+from pydantic import BaseModel
+
 from image_tagger import vision
 from tests._workflow_split import export_tests
 
@@ -51,6 +53,41 @@ def test_get_vision_model_client_adapter_rejects_unknown_provider() -> None:
         pass
     else:
         raise AssertionError("Expected ValueError for invalid provider.")
+
+
+def test_ollama_vision_task_allows_long_responses() -> None:
+    """Request enough output tokens for long structured responses."""
+    calls: list[dict[str, object]] = []
+
+    class ResponseData(BaseModel):
+        value: str
+
+    class FakeClient:
+        def chat(self, **kwargs: object) -> dict[str, object]:
+            calls.append(kwargs)
+            return {
+                "message": {"content": '{"value":"ok"}'},
+                "model": "demo-model",
+                "prompt_eval_count": 10,
+                "eval_count": 5,
+            }
+
+    adapter = vision.OllamaVisionModelClientAdapter.__new__(
+        vision.OllamaVisionModelClientAdapter,
+    )
+    adapter.model = "demo-model"
+    adapter.client = FakeClient()
+
+    result = adapter.vision_task("image-data", "prompt", ResponseData)
+
+    assert calls[0]["options"] == {
+        "temperature": 0,
+        "image_min_tokens": 1120,
+        "image_max_tokens": 1120,
+        "num_ctx": 16384,
+        "num_predict": 8192,
+    }
+    assert result.data == ResponseData(value="ok")
 
 
 def test_ollama_cleanup_unloads_model() -> None:
