@@ -215,6 +215,7 @@ def generate_wall(
     double_wide_threshold: float = WALL_DOUBLE_WIDE_THRESHOLD,
     assume_columns: int = DEFAULT_WALL_ASSUMED_COLUMNS,
     verbose: int = 1,
+    dry_run: bool = False,
 ) -> Path:
     """Generate a static image wall HTML file."""
     if find_images_func is None:
@@ -288,7 +289,8 @@ def generate_wall(
         cell_height=cell_height,
         wall_title=title or wall_title_from_directory(directory_path),
     )
-    output_path.write_text(output, encoding="utf-8")
+    if not dry_run:
+        output_path.write_text(output, encoding="utf-8")
     if verbose >= 1:
         double_wide_count = sum(1 for item in items if item["is_double_wide"])
         cell_count = len(items) + double_wide_count
@@ -303,7 +305,8 @@ def generate_wall(
                 n_divisors += 1
         divisibility_percentage = 100 * n_divisors / DIVISOR_RANGE
 
-        print(f"wrote {quote_display_path(output_path)}")
+        if not dry_run:
+            print(f"wrote {quote_display_path(output_path)}")
         print(
             f"{len(items)} images + "
             f"{double_wide_count} double-wide = {reported_cell_count} ({divisibility_percentage}%)"

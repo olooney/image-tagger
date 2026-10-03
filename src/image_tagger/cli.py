@@ -274,7 +274,7 @@ def wall(args: argparse.Namespace) -> None:
     """Generate and optionally preview an image wall."""
     output_filename = generate_wall(
         args.directory,
-        args.output_filename,
+        output_filename=args.output_filename,
         metadata_filename=args.metadata_filename,
         order=args.order,
         seed=args.seed,
@@ -282,8 +282,9 @@ def wall(args: argparse.Namespace) -> None:
         double_wide_threshold=args.double_wide_threshold,
         assume_columns=args.assume_columns,
         verbose=args.verbose,
+        dry_run=args.dry_run,
     )
-    if args.preview:
+    if args.preview and not args.dry_run:
         preview(output_filename)
 
 

@@ -2658,6 +2658,21 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert quiet_output == ""
 
 
+def test_wall_cli_dry_run_calculates_layout_without_writing(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Report the wall layout without generating its HTML file."""
+    uploads_dir = tmp_path / "books"
+    uploads_dir.mkdir()
+    Image.new("RGB", (100, 100)).save(uploads_dir / "square.jpg")
+
+    output = run_cli("wall", str(uploads_dir), "--no-preview", "--dry-run")
+
+    assert output == "1 images + 0 double-wide = 1080 (65.0%)\n"
+    assert not (uploads_dir / "index.html").exists()
+
+
 def test_wall_cli_uses_exif_orientation_and_reweighted_cell_aspect_ratio(
     tmp_path: Path,
     run_cli: Callable[..., str],
