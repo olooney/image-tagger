@@ -1,8 +1,10 @@
 import argparse
 import re
 from pathlib import Path
+from typing import cast
 
 from . import review_app, transform
+from . import sfw as sfw_command
 from .compare import prune_embedding_cache
 from .constants import (
     DEDUPE_EMBEDDINGS_FILENAME,
@@ -62,6 +64,19 @@ def extensions_arg(value: str) -> list[str]:
     return extensions
 
 
+def nsfw_models_arg(value: str) -> list[sfw_command.SfwProvider]:
+    """Parse a comma-delimited list of NSFW classifier providers."""
+    providers = [provider.strip().lower() for provider in value.split(",")]
+    supported = tuple(sfw_command.MODEL_NAMES)
+    if not providers or any(provider not in supported for provider in providers):
+        raise argparse.ArgumentTypeError(
+            f"NSFW models must be selected from {', '.join(supported)}."
+        )
+    if len(providers) != len(set(providers)):
+        raise argparse.ArgumentTypeError("NSFW models must not be repeated.")
+    return cast(list[sfw_command.SfwProvider], providers)
+
+
 def file_size_arg(value: str) -> int:
     """Parse a lenient decimal file size such as 1 MB or 500k."""
     normalized_value = value.strip().lower().replace(",", "").replace("_", "")
@@ -92,6 +107,22 @@ def positive_int_arg(value: str) -> int:
     parsed_value = int(value)
     if parsed_value < 1:
         raise argparse.ArgumentTypeError("Value must be greater than zero.")
+    return parsed_value
+
+
+def nonnegative_int_arg(value: str) -> int:
+    """Parse a nonnegative integer argument."""
+    parsed_value = int(value)
+    if parsed_value < 0:
+        raise argparse.ArgumentTypeError("Value must be zero or greater.")
+    return parsed_value
+
+
+def probability_arg(value: str) -> float:
+    """Parse a probability between zero and one."""
+    parsed_value = float(value)
+    if not 0.0 <= parsed_value <= 1.0:
+        raise argparse.ArgumentTypeError("Value must be between zero and one.")
     return parsed_value
 
 
@@ -158,6 +189,22 @@ def tag(args: argparse.Namespace) -> None:
         categories=args.stackmap_config.categories,
         category_descriptions=args.stackmap_config.category_descriptions,
         quad_detector=transform.detect_quad if args.quad else None,
+    )
+
+
+def sfw(args: argparse.Namespace) -> None:
+    """Classify upload images as SFW or NSFW."""
+    filepaths = find_images(
+        args.directory,
+        extension_filter=args.extensions,
+    )
+    sfw_command.classify_images(
+        filepaths,
+        providers=args.nsfw_model,
+        threshold=args.threshold,
+        vote_threshold=args.vote_threshold,
+        grid_depth=args.grid_depth,
+        verbose=args.verbose,
     )
 
 
@@ -461,6 +508,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Detect and store normalized perspective-corner coordinates.",
     )
     tag_parser.set_defaults(func=tag)
+
+    sfw_parser = subparsers.add_parser(
+        "sfw",
+        help="Classify upload images as SFW or NSFW.",
+    )
+    add_common_upload_args(sfw_parser)
+    sfw_parser.add_argument(
+        "--extensions",
+        type=extensions_arg,
+        default=WELCOME_EXTENSIONS,
+    )
+    sfw_parser.add_argument(
+        "--nsfw-model",
+        type=nsfw_models_arg,
+        default=[sfw_command.DEFAULT_PROVIDER],
+        help="Comma-delimited NSFW classifier providers.",
+    )
+    sfw_parser.add_argument(
+        "--threshold",
+        type=probability_arg,
+        default=0.5,
+        help="Minimum NSFW score that gives a model one NSFW vote.",
+    )
+    sfw_parser.add_argument(
+        "--vote-threshold",
+        type=positive_int_arg,
+        default=1,
+        help="Minimum model votes for an aggregate NSFW classification.",
+    )
+    sfw_parser.add_argument(
+        "--grid-depth",
+        type=nonnegative_int_arg,
+        help="Tile depths after the padded gestalt; defaults by image size.",
+    )
+    sfw_parser.set_defaults(func=sfw)
 
     quad_parser = subparsers.add_parser(
         "quad",

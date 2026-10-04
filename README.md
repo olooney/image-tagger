@@ -43,6 +43,7 @@ tag, and do human-in-the-loop review of new images, do:
 ```bash
 image-tagger convert [DIRECTORY]  # normalize image extensions and metadata
 image-tagger tag [DIRECTORY]      # Have a VLM infer tags, categories, clean filenames, etc.
+image-tagger sfw [DIRECTORY]      # Classify images as SFW or NSFW
 image-tagger rename [DIRECTORY]   # renamed image files to VLM-inferred filenames
 image-tagger quad [DIRECTORY]     # fill in missing perspective-corner metadata for tagged images
 image-tagger review [DIRECTORY]   # open interactive HTMX review app
@@ -119,6 +120,8 @@ paths. For example, `image-tagger dedupe books` uses the configured `books` shel
 in a structured dataset. It also determines a clean filename for each image
 according to internal naming conventions. Multiple model providers are supported
 ([Download example CSV](https://olooney.github.io/image-tagger/docs/example/image_metadata.csv)).
+
+`image-tagger sfw` classifies every discovered image as SFW or NSFW.q
 
 `image-tagger quad` calculates missing `quad` values for existing images with successful
 tag metadata. It skips rows whose files are missing or whose `quad` value is
