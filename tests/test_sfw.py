@@ -1,9 +1,15 @@
+import base64
+import json
 import sys
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+import pandas as pd
 import pytest
+from openai import OpenAI
 from PIL import Image
 
 from image_tagger import cli, sfw
@@ -188,9 +194,9 @@ def test_maximum_verbosity_reports_every_scan_result(
     )
 
     output = capsys.readouterr().out
-    assert output.count("Falconsai/nsfw_image_detection: label=") == result_count
-    assert output.count("Falconsai/nsfw_image_detection input:") == result_count
-    assert output.count("Falconsai/nsfw_image_detection output:") == result_count
+    assert output.count("omni-moderation-latest: label=") == result_count
+    assert output.count("omni-moderation-latest input:") == result_count
+    assert output.count("omni-moderation-latest output:") == result_count
 
 
 def test_default_verbosity_prints_only_nsfw_results(
@@ -238,15 +244,15 @@ def test_increased_and_maximum_verbosity_print_details(
 
     sfw.classify_images([image_path], verbose=2)
     verbose_output = capsys.readouterr().out
-    assert "loading Falconsai/nsfw_image_detection ...success!" in verbose_output
+    assert "loading omni-moderation-latest ...success!" in verbose_output
     assert "label=SFW confidence=80.00%" in verbose_output
     assert "input:" not in verbose_output
 
     sfw.classify_images([image_path], verbose=3)
     maximum_output = capsys.readouterr().out
-    assert "Falconsai/nsfw_image_detection: label=SFW confidence=80.00%" in maximum_output
-    assert 'Falconsai/nsfw_image_detection input: {"filepath": "images/sfw.jpg", "size": [4, 4]}' in maximum_output
-    assert 'Falconsai/nsfw_image_detection output: {"label": "SFW"' in maximum_output
+    assert "omni-moderation-latest: label=SFW confidence=80.00%" in maximum_output
+    assert 'omni-moderation-latest input: {"filepath": "images/sfw.jpg", "size": [4, 4]}' in maximum_output
+    assert 'omni-moderation-latest output: {"label": "SFW"' in maximum_output
 
 
 def test_multiple_models_vote_and_report_lowest_voter_confidence(
@@ -375,27 +381,39 @@ def test_model_load_failure_prints_summary(
 def test_sfw_parser_matches_tag_file_selection_arguments() -> None:
     """Expose directory, extension, and shared verbosity options."""
     args = cli.build_parser().parse_args(
-        ["sfw", "uploads", "--extensions", "jpg,png", "-vv"]
+        ["sfw", "uploads", "--nsfw-extensions", "jpg,png", "-vv"]
     )
 
     assert args.directory == Path("uploads")
-    assert args.extensions == [".jpg", ".png"]
+    assert args.nsfw_extensions == [".jpg", ".png"]
     assert args.verbose == 1
     assert args.verbose_delta == 2
-    assert args.nsfw_model == ["falconsai"]
-    assert args.threshold == 0.5
-    assert args.vote_threshold == 1
-    assert args.grid_depth is None
+    assert args.nsfw_model == ["openai"]
+    assert args.nsfw_threshold == 0.5
+    assert args.nsfw_vote_threshold == 1
+    assert args.nsfw_grid_depth is None
+    assert not hasattr(args, "extensions")
+    assert not hasattr(args, "threshold")
+    assert not hasattr(args, "vote_threshold")
+    assert not hasattr(args, "grid_depth")
     assert args.func is cli.sfw
 
 
 def test_sfw_parser_accepts_comma_delimited_models() -> None:
     """Accept each supported classifier in one ordered list."""
     args = cli.build_parser().parse_args(
-        ["sfw", "--nsfw-model", "falconsai,marqo,adamcodd"]
+        ["sfw", "--nsfw-model", "falconsai,marqo,adamcodd,openai"]
     )
 
-    assert args.nsfw_model == ["falconsai", "marqo", "adamcodd"]
+    assert args.nsfw_model == ["falconsai", "marqo", "adamcodd", "openai"]
+
+
+@pytest.mark.parametrize("option", ["--nsfw-model=openai", "---nsfw-model=openai"])
+def test_sfw_parser_accepts_openai(option: str) -> None:
+    """Accept OpenAI with the standard option and its three-dash alias."""
+    args = cli.build_parser().parse_args(["sfw", option])
+
+    assert args.nsfw_model == ["openai"]
 
 
 def test_sfw_cli_passes_resolved_verbosity_and_discovered_files(
@@ -406,9 +424,7 @@ def test_sfw_cli_passes_resolved_verbosity_and_discovered_files(
     stackmap_path = tmp_path / "config.yaml"
     stackmap_path.write_text(f"default: {tmp_path}\nart: {tmp_path / 'art'}\n")
     image_paths = [tmp_path / "one.jpg"]
-    calls: list[
-        tuple[list[Path], list[sfw.SfwProvider], float, int, int, int]
-    ] = []
+    calls: list[dict[str, Any]] = []
 
     def fake_classify_images(
         paths: list[Path],
@@ -418,9 +434,21 @@ def test_sfw_cli_passes_resolved_verbosity_and_discovered_files(
         vote_threshold: int,
         grid_depth: int,
         verbose: int,
+        metadata_filename: Path | None,
+        dry_run: bool,
     ) -> sfw.SfwSummary:
+        """Record classification options without loading a provider."""
         calls.append(
-            (paths, providers, threshold, vote_threshold, grid_depth, verbose)
+            {
+                "paths": paths,
+                "providers": providers,
+                "threshold": threshold,
+                "vote_threshold": vote_threshold,
+                "grid_depth": grid_depth,
+                "verbose": verbose,
+                "metadata_filename": metadata_filename,
+                "dry_run": dry_run,
+            }
         )
         return sfw.SfwSummary(total=len(paths), sfw=len(paths), nsfw=0, errors=0)
 
@@ -437,12 +465,17 @@ def test_sfw_cli_passes_resolved_verbosity_and_discovered_files(
             str(stackmap_path),
             "--nsfw-model",
             "falconsai,adamcodd",
-            "--threshold",
+            "--nsfw-threshold",
             "0.7",
-            "--vote-threshold",
+            "--nsfw-vote-threshold",
             "2",
-            "--grid-depth",
+            "--nsfw-grid-depth",
             "3",
+            "--nsfw-extensions",
+            "jpg",
+            "--metadata-filename",
+            str(tmp_path / "scores.csv"),
+            "--dry-run",
             "-vv",
         ],
     )
@@ -450,8 +483,174 @@ def test_sfw_cli_passes_resolved_verbosity_and_discovered_files(
     cli.main()
 
     assert calls == [
-        (image_paths, ["falconsai", "adamcodd"], 0.7, 2, 3, 3)
+        {
+            "paths": image_paths,
+            "providers": ["falconsai", "adamcodd"],
+            "threshold": 0.7,
+            "vote_threshold": 2,
+            "grid_depth": 3,
+            "verbose": 3,
+            "metadata_filename": tmp_path / "scores.csv",
+            "dry_run": True,
+        }
     ]
+
+
+def moderation_payload(sexual: float, flagged: bool) -> dict[str, Any]:
+    """Build a complete moderation response with unrelated categories flagged."""
+    categories = [
+        "sexual",
+        "sexual/minors",
+        "harassment",
+        "harassment/threatening",
+        "hate",
+        "hate/threatening",
+        "illicit",
+        "illicit/violent",
+        "self-harm",
+        "self-harm/intent",
+        "self-harm/instructions",
+        "violence",
+        "violence/graphic",
+    ]
+    return {
+        "id": "modr-test",
+        "model": "omni-moderation-latest",
+        "results": [
+            {
+                "flagged": flagged,
+                "categories": {category: True for category in categories},
+                "category_scores": {
+                    category: sexual if category == "sexual" else 1.0
+                    for category in categories
+                },
+                "category_applied_input_types": {
+                    category: ["image"] for category in categories
+                },
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("sexual", "flagged", "threshold", "label"),
+    [
+        (0.0, True, 0.5, "SFW"),
+        (0.25, True, 0.5, "SFW"),
+        (0.75, False, 0.5, "NSFW"),
+        (0.75, True, 0.8, "SFW"),
+        (0.5, False, 0.5, "NSFW"),
+        (1.0, False, 0.5, "NSFW"),
+    ],
+)
+def test_openai_classifier_uses_only_sexual_score(
+    sexual: float,
+    flagged: bool,
+    threshold: float,
+    label: sfw.SafetyLabel,
+) -> None:
+    """Encode the region and map SDK moderation scores without network access."""
+    requests: list[dict[str, Any]] = []
+    payload = moderation_payload(sexual, flagged)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        assert request.url.path == "/v1/moderations"
+        return httpx.Response(200, json=payload)
+
+    with OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    ) as client:
+        classifier = sfw.OpenAISfwClassifier(client)
+        with Image.new("RGB", (8, 6), "white") as image:
+            details = {"scan": "tile", "crop_box": [0, 0, 8, 6]}
+            result = classifier.classify(
+                image,
+                input_details=details,
+                threshold=threshold,
+            )
+            assert image.getpixel((0, 0)) == (255, 255, 255)
+
+    assert result.label == label
+    assert result.scores == {"SFW": 1.0 - sexual, "NSFW": sexual}
+    assert result.confidence == result.scores[label]
+    assert result.input_details == {**details, "mode": "RGB", "size": [8, 6]}
+    assert result.output_details["nsfw_threshold"] == threshold
+    assert result.output_details["response"]["results"][0]["flagged"] == flagged
+    json.dumps(result.output_details)
+    assert details == {"scan": "tile", "crop_box": [0, 0, 8, 6]}
+    request = requests[0]
+    assert request["model"] == "omni-moderation-latest"
+    assert len(request["input"]) == 1
+    assert request["input"][0]["type"] == "image_url"
+    url = request["input"][0]["image_url"]["url"]
+    prefix, encoded = url.split(",", 1)
+    assert prefix == "data:image/png;base64"
+    with Image.open(BytesIO(base64.b64decode(encoded))) as sent:
+        assert sent.size == (8, 6)
+        assert sent.getpixel((0, 0)) == (255, 255, 255)
+    assert encoded not in json.dumps(result.input_details)
+
+
+def test_openai_loader_does_not_import_local_ml_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Initialize the SDK client without loading local model runtimes."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    for module in ["torch", "transformers", "timm"]:
+        monkeypatch.setitem(sys.modules, module, None)
+
+    classifier = sfw.load_sfw_classifier("openai")
+
+    assert isinstance(classifier, sfw.OpenAISfwClassifier)
+    assert classifier.client.api_key == "test-key"
+    classifier.client.close()
+
+
+@pytest.mark.parametrize("verbose", [1, 3])
+def test_openai_workflow_scans_tiles_without_local_model_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    verbose: int,
+) -> None:
+    """Preserve tiled scanning and verbosity for the remote provider."""
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (16, 16)).save(image_path)
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=moderation_payload(0.1, True))
+
+    def unexpected_progress(*, enabled: bool) -> None:
+        pytest.fail("OpenAI should not configure local model progress")
+
+    monkeypatch.setattr(sfw, "_configure_model_progress", unexpected_progress)
+    with OpenAI(
+        api_key="test-key",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    ) as client:
+        classifier = sfw.OpenAISfwClassifier(client)
+        monkeypatch.setattr(sfw, "load_sfw_classifier", lambda provider: classifier)
+        summary = sfw.classify_images(
+            [image_path],
+            providers=["openai"],
+            grid_depth=1,
+            verbose=verbose,
+        )
+
+    assert summary == sfw.SfwSummary(total=1, sfw=1, nsfw=0, errors=0)
+    assert len(requests) == 5
+    output = capsys.readouterr().out
+    if verbose == 1:
+        assert output == "NSFW: 0/1 (0.0%)\n"
+    else:
+        assert "loading omni-moderation-latest ...success!" in output
+        assert output.count("omni-moderation-latest: label=SFW") == 5
+        assert output.count("omni-moderation-latest input:") == 5
+        assert output.count("omni-moderation-latest output:") == 5
 
 
 class FakeTensor:
@@ -612,3 +811,180 @@ def test_marqo_classifier_maps_model_labels(tmp_path: Path) -> None:
 
     assert lenient_result.label == "NSFW"
     assert lenient_result.output_details["nsfw_threshold"] == 0.2
+
+
+def test_classify_images_defaults_to_openai(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use OpenAI when no provider list is supplied."""
+    image_path = tmp_path / "image.jpg"
+    Image.new("RGB", (8, 8)).save(image_path)
+    loaded: list[sfw.SfwProvider] = []
+
+    def load(provider: sfw.SfwProvider) -> sfw.SfwClassifier:
+        """Record the selected provider without remote inference."""
+        loaded.append(provider)
+        return RecordingClassifier([0.1])
+
+    monkeypatch.setattr(sfw, "load_sfw_classifier", load)
+    assert sfw.DEFAULT_PROVIDER == "openai"
+    assert sfw.classify_images([image_path], verbose=0).sfw == 1
+    assert loaded == ["openai"]
+
+
+@pytest.mark.parametrize("reverse_providers", [False, True])
+def test_metadata_persists_maximum_provider_and_tile_probability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reverse_providers: bool,
+) -> None:
+    """Persist the maximum score, not vote confidence or the last provider."""
+    image_path = tmp_path / "image.jpg"
+    Image.new("RGB", (8, 8)).save(image_path)
+    metadata_path = tmp_path / "metadata.csv"
+    classifiers = {
+        "openai": RecordingClassifier([0.1, 0.2, 0.8, 0.3, 0.4]),
+        "falconsai": RecordingClassifier([0.1] * 5),
+    }
+    monkeypatch.setattr(sfw, "load_sfw_classifier", lambda provider: classifiers[provider])
+    providers: list[sfw.SfwProvider] = ["openai", "falconsai"]
+    if reverse_providers:
+        providers.reverse()
+
+    summary = sfw.classify_images(
+        [image_path],
+        providers=providers,
+        vote_threshold=2,
+        grid_depth=1,
+        metadata_filename=metadata_path,
+        verbose=0,
+    )
+
+    assert summary.sfw == 1
+    metadata = pd.read_csv(metadata_path)
+    assert len(metadata) == 1
+    assert metadata.at[0, "nsfw_score"] == pytest.approx(0.8)
+    assert Path(metadata.at[0, "original_filepath"]) == image_path
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+@pytest.mark.parametrize("existing_score", [False, True])
+def test_metadata_matches_paths_preserves_columns_and_appends_missing_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    renamed: bool,
+    existing_score: bool,
+) -> None:
+    """Update original or renamed rows without losing custom or unrelated data."""
+    original_path = tmp_path / "original.jpg"
+    image_path = original_path.with_name("clean.jpg") if renamed else original_path
+    new_path = tmp_path / "new.jpg"
+    for path in [image_path, new_path]:
+        Image.new("RGB", (8, 8)).save(path)
+    metadata_path = tmp_path / "metadata.csv"
+    before = pd.DataFrame(
+        [
+            {
+                "status": "ok",
+                "original_filepath": str(original_path),
+                "clean_filename": "clean.jpg",
+                "description": "Keep this description",
+                "custom": "Keep this custom field",
+                "nsfw_score": "0.05",
+            },
+            {
+                "status": "ok",
+                "original_filepath": str(tmp_path / "unrelated.jpg"),
+                "clean_filename": "",
+                "description": "Unrelated",
+                "custom": "Untouched",
+                "nsfw_score": "0.25",
+            },
+        ],
+    )
+    if not existing_score:
+        before = before.drop(columns="nsfw_score")
+    before.to_csv(metadata_path, index=False)
+    monkeypatch.setattr(sfw, "load_sfw_classifier", lambda provider: RecordingClassifier([0.9, 0.3]))
+
+    sfw.classify_images(
+        [image_path, new_path],
+        metadata_filename=metadata_path,
+        verbose=0,
+    )
+
+    after = pd.read_csv(metadata_path, keep_default_na=False)
+    assert len(after) == 3
+    assert set(before.columns).issubset(after.columns)
+    preserved = before.drop(columns="nsfw_score", errors="ignore")
+    pd.testing.assert_frame_equal(after.loc[:1, preserved.columns], preserved)
+    assert float(after.at[0, "nsfw_score"]) == pytest.approx(0.9)
+    if existing_score:
+        assert float(after.at[1, "nsfw_score"]) == pytest.approx(0.25)
+    else:
+        assert after.at[1, "nsfw_score"] == ""
+    assert Path(after.at[2, "original_filepath"]) == new_path
+    assert float(after.at[2, "nsfw_score"]) == pytest.approx(0.3)
+    assert after.at[2, "custom"] == ""
+
+
+@pytest.mark.parametrize(
+    ("existing", "existing_score"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_dry_run_does_not_create_or_change_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
+    existing_score: bool,
+) -> None:
+    """Run inference without creating a score column or writing metadata."""
+    image_path = tmp_path / "image.jpg"
+    Image.new("RGB", (8, 8)).save(image_path)
+    metadata_path = tmp_path / "metadata.csv"
+    original: bytes | None = None
+    if existing:
+        metadata = pd.DataFrame(
+            [
+                {
+                    "status": "ok",
+                    "original_filepath": str(image_path),
+                    "custom": "keep",
+                },
+            ],
+        )
+        if existing_score:
+            metadata["nsfw_score"] = 0.25
+        metadata.to_csv(metadata_path, index=False)
+        original = metadata_path.read_bytes()
+    monkeypatch.setattr(sfw, "load_sfw_classifier", lambda provider: RecordingClassifier([0.9]))
+
+    summary = sfw.classify_images(
+        [image_path],
+        metadata_filename=metadata_path,
+        dry_run=True,
+        verbose=0,
+    )
+
+    assert summary.nsfw == 1
+    if existing:
+        assert metadata_path.read_bytes() == original
+        assert ("nsfw_score" in pd.read_csv(metadata_path).columns) is existing_score
+    else:
+        assert not metadata_path.exists()
+
+
+def test_classification_without_metadata_does_not_write_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the optional persistence argument backward compatible."""
+    image_path = tmp_path / "image.jpg"
+    Image.new("RGB", (8, 8)).save(image_path)
+    before = set(tmp_path.iterdir())
+    monkeypatch.setattr(sfw, "load_sfw_classifier", lambda provider: RecordingClassifier([0.9]))
+
+    sfw.classify_images([image_path], verbose=0)
+
+    assert set(tmp_path.iterdir()) == before

@@ -196,15 +196,17 @@ def sfw(args: argparse.Namespace) -> None:
     """Classify upload images as SFW or NSFW."""
     filepaths = find_images(
         args.directory,
-        extension_filter=args.extensions,
+        extension_filter=args.nsfw_extensions,
     )
     sfw_command.classify_images(
         filepaths,
         providers=args.nsfw_model,
-        threshold=args.threshold,
-        vote_threshold=args.vote_threshold,
-        grid_depth=args.grid_depth,
+        threshold=args.nsfw_threshold,
+        vote_threshold=args.nsfw_vote_threshold,
+        grid_depth=args.nsfw_grid_depth,
         verbose=args.verbose,
+        metadata_filename=args.metadata_filename,
+        dry_run=args.dry_run,
     )
 
 
@@ -354,6 +356,8 @@ def review(args: argparse.Namespace) -> None:
         provider=args.provider,
         verbose=args.verbose,
         filename_glob=args.filename,
+        nsfw_show_threshold=args.nsfw_show_threshold,
+        nsfw_highlight_threshold=args.nsfw_highlight_threshold,
     )
 
 
@@ -363,6 +367,7 @@ def run(args: argparse.Namespace) -> None:
     tag(args)
     rename(args)
     quad(args)
+    sfw(args)
     review(args)
 
 
@@ -416,6 +421,56 @@ def add_common_upload_args(parser: argparse.ArgumentParser) -> None:
         "--dry-run",
         action="store_true",
         help="simulate running the command without taking actions.",
+    )
+
+
+def add_nsfw_args(parser: argparse.ArgumentParser) -> None:
+    """Add namespaced image safety classification options."""
+    parser.add_argument(
+        "--nsfw-extensions",
+        type=extensions_arg,
+        default=WELCOME_EXTENSIONS,
+        help="Comma-delimited image extensions to classify for NSFW content.",
+    )
+    parser.add_argument(
+        "--nsfw-model",
+        "---nsfw-model",
+        type=nsfw_models_arg,
+        default=[sfw_command.DEFAULT_PROVIDER],
+        help="Comma-delimited NSFW providers: falconsai, marqo, adamcodd, openai (default).",
+    )
+    parser.add_argument(
+        "--nsfw-threshold",
+        type=probability_arg,
+        default=0.5,
+        help="Minimum NSFW score that gives a model one NSFW vote.",
+    )
+    parser.add_argument(
+        "--nsfw-vote-threshold",
+        type=positive_int_arg,
+        default=1,
+        help="Minimum model votes for an aggregate NSFW classification.",
+    )
+    parser.add_argument(
+        "--nsfw-grid-depth",
+        type=nonnegative_int_arg,
+        help="Tile depths after the padded gestalt; defaults by image size.",
+    )
+
+
+def add_nsfw_review_args(parser: argparse.ArgumentParser) -> None:
+    """Add probability thresholds for review safety badges."""
+    parser.add_argument(
+        "--nsfw-show-threshold",
+        type=probability_arg,
+        default=0.1,
+        help="Show NSFW scores above this probability (default: 0.1).",
+    )
+    parser.add_argument(
+        "--nsfw-highlight-threshold",
+        type=probability_arg,
+        default=0.2,
+        help="Highlight NSFW scores above this probability (default: 0.2).",
     )
 
 
@@ -514,34 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Classify upload images as SFW or NSFW.",
     )
     add_common_upload_args(sfw_parser)
-    sfw_parser.add_argument(
-        "--extensions",
-        type=extensions_arg,
-        default=WELCOME_EXTENSIONS,
-    )
-    sfw_parser.add_argument(
-        "--nsfw-model",
-        type=nsfw_models_arg,
-        default=[sfw_command.DEFAULT_PROVIDER],
-        help="Comma-delimited NSFW classifier providers.",
-    )
-    sfw_parser.add_argument(
-        "--threshold",
-        type=probability_arg,
-        default=0.5,
-        help="Minimum NSFW score that gives a model one NSFW vote.",
-    )
-    sfw_parser.add_argument(
-        "--vote-threshold",
-        type=positive_int_arg,
-        default=1,
-        help="Minimum model votes for an aggregate NSFW classification.",
-    )
-    sfw_parser.add_argument(
-        "--grid-depth",
-        type=nonnegative_int_arg,
-        help="Tile depths after the padded gestalt; defaults by image size.",
-    )
+    add_nsfw_args(sfw_parser)
     sfw_parser.set_defaults(func=sfw)
 
     quad_parser = subparsers.add_parser(
@@ -594,6 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
         "review", help="Serve an editable metadata review app."
     )
     add_common_upload_args(review_parser)
+    add_nsfw_review_args(review_parser)
     review_parser.add_argument(
         "--provider",
         choices=["openai", "gemma", "qwen"],
@@ -659,9 +688,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser(
         "run",
-        help="Run convert, tag, rename, quad, and review in sequence.",
+        help="Run convert, tag, rename, quad, sfw, and review in sequence.",
     )
     add_common_upload_args(run_parser)
+    add_nsfw_args(run_parser)
+    add_nsfw_review_args(run_parser)
     run_parser.add_argument(
         "-w",
         "--welcome-extensions",

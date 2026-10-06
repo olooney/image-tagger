@@ -1,21 +1,30 @@
+import base64
 import json
 import traceback
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+import pandas as pd
 from PIL import Image, ImageOps
 
+if TYPE_CHECKING:
+    from openai import OpenAI
+
+from .constants import REVIEW_ID_COLUMN
+from .tagging import csv_columns, new_metadata_review_id
 from .util import quote_display_path
 
 type SafetyLabel = Literal["SFW", "NSFW"]
-type SfwProvider = Literal["falconsai", "marqo", "adamcodd"]
+type SfwProvider = Literal["falconsai", "marqo", "adamcodd", "openai"]
 
-DEFAULT_PROVIDER: SfwProvider = "falconsai"
+DEFAULT_PROVIDER: SfwProvider = "openai"
 MODEL_NAMES: dict[SfwProvider, str] = {
     "falconsai": "Falconsai/nsfw_image_detection",
     "marqo": "Marqo/nsfw-image-detection-384",
     "adamcodd": "AdamCodd/vit-base-nsfw-detector",
+    "openai": "omni-moderation-latest",
 }
 
 
@@ -182,10 +191,68 @@ class MarqoSfwClassifier:
         )
 
 
+class OpenAISfwClassifier:
+    """Classify images using OpenAI's sexual moderation score."""
+
+    def __init__(self, client: OpenAI) -> None:
+        """Store the moderation client."""
+        self.client = client
+
+    def classify(
+        self,
+        image: Image.Image,
+        *,
+        input_details: dict[str, Any],
+        threshold: float = 0.5,
+    ) -> SfwClassification:
+        """Moderate one prepared region using only the sexual category."""
+        with BytesIO() as buffer:
+            with image.convert("RGB") as prepared:
+                prepared.save(buffer, format="PNG")
+            image_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+        response = self.client.moderations.create(
+            model=MODEL_NAMES["openai"],
+            input=[
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_b64}",
+                    },
+                },
+            ],
+        )
+        nsfw_score = response.results[0].category_scores.sexual
+        scores: dict[SafetyLabel, float] = {
+            "SFW": 1.0 - nsfw_score,
+            "NSFW": nsfw_score,
+        }
+        label: SafetyLabel = "NSFW" if nsfw_score >= threshold else "SFW"
+        return SfwClassification(
+            label=label,
+            confidence=scores[label],
+            scores=scores,
+            input_details={
+                **input_details,
+                "mode": image.mode,
+                "size": list(image.size),
+            },
+            output_details={
+                "response": response.model_dump(mode="json"),
+                "nsfw_threshold": threshold,
+                "label": label,
+            },
+        )
+
+
 def load_sfw_classifier(
     provider: SfwProvider = DEFAULT_PROVIDER,
 ) -> SfwClassifier:
     """Load the selected classifier runtime and model on demand."""
+    if provider == "openai":
+        from openai import OpenAI
+
+        return OpenAISfwClassifier(OpenAI())
+
     try:
         import torch
     except ImportError as error:
@@ -396,6 +463,59 @@ def _print_summary(summary: SfwSummary) -> None:
     print(_format_ratio("NSFW", summary.nsfw, summary.total))
 
 
+def _write_nsfw_scores(
+    metadata_filename: Path,
+    scores: dict[Path, float],
+) -> None:
+    """Update safety scores while preserving existing metadata and renamed paths."""
+    try:
+        metadata_df = pd.read_csv(metadata_filename, keep_default_na=False)
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        metadata_df = pd.DataFrame(columns=csv_columns)
+    if "nsfw_score" not in metadata_df:
+        metadata_df["nsfw_score"] = ""
+    metadata_df["nsfw_score"] = metadata_df["nsfw_score"].astype(object)
+    remaining = {path.resolve(): score for path, score in scores.items()}
+    matched: set[Path] = set()
+    for index, row in metadata_df.iterrows():
+        original_filepath = str(row.get("original_filepath", "")).strip()
+        if not original_filepath:
+            continue
+        original_path = Path(original_filepath)
+        clean_filename = str(row.get("clean_filename", "")).strip()
+        candidates = [original_path]
+        if clean_filename:
+            candidates.append(original_path.with_name(clean_filename))
+        for candidate in candidates:
+            resolved_path = candidate.resolve()
+            if resolved_path in remaining:
+                metadata_df.at[index, "nsfw_score"] = remaining[resolved_path]
+                matched.add(resolved_path)
+                break
+    new_rows: list[dict[str, Any]] = []
+    for path, score in remaining.items():
+        if path in matched:
+            continue
+        row: dict[str, Any] = dict.fromkeys(metadata_df.columns, "")
+        row.update(
+            {
+                REVIEW_ID_COLUMN: new_metadata_review_id(),
+                "status": "ok",
+                "original_filepath": str(path),
+                "original_filename": path.name,
+                "nsfw_score": score,
+            }
+        )
+        new_rows.append(row)
+    if new_rows:
+        metadata_df = pd.concat(
+            [metadata_df, pd.DataFrame(new_rows)],
+            ignore_index=True,
+        )
+    metadata_filename.parent.mkdir(parents=True, exist_ok=True)
+    metadata_df.to_csv(metadata_filename, index=False)
+
+
 def classify_images(
     filepaths: list[Path],
     *,
@@ -404,8 +524,10 @@ def classify_images(
     vote_threshold: int = 1,
     grid_depth: int | None = None,
     verbose: int = 1,
+    metadata_filename: Path | None = None,
+    dry_run: bool = False,
 ) -> SfwSummary:
-    """Classify images and print results according to CLI verbosity."""
+    """Classify images and optionally persist their highest NSFW probabilities."""
     providers = [DEFAULT_PROVIDER] if providers is None else providers
     if not providers:
         raise ValueError("At least one NSFW model is required.")
@@ -419,7 +541,8 @@ def classify_images(
         return summary
 
     classifiers: dict[SfwProvider, SfwClassifier] = {}
-    _configure_model_progress(enabled=verbose >= 2)
+    if any(provider != "openai" for provider in providers):
+        _configure_model_progress(enabled=verbose >= 2)
     try:
         for provider in providers:
             model_name = MODEL_NAMES[provider]
@@ -443,6 +566,7 @@ def classify_images(
     sfw_count = 0
     nsfw_count = 0
     error_count = 0
+    nsfw_scores: dict[Path, float] = {}
     for filepath in filepaths:
         try:
             results: dict[SfwProvider, SfwClassification] = {}
@@ -457,6 +581,9 @@ def classify_images(
                     scan_results=provider_details if verbose >= 3 else None,
                 )
                 detailed_results[provider] = provider_details
+            nsfw_scores[filepath] = max(
+                result.scores["NSFW"] for result in results.values()
+            )
             votes = sum(
                 result.label == "NSFW"
                 for result in results.values()
@@ -503,6 +630,22 @@ def classify_images(
                 print(f"{quote_display_path(filepath)}: error!")
             if verbose >= 3:
                 traceback.print_exc()
+
+    if metadata_filename is not None and not dry_run:
+        if verbose >= 2:
+            print(
+                f"updating {quote_display_path(metadata_filename)} ...",
+                end="",
+                flush=True,
+            )
+        try:
+            _write_nsfw_scores(metadata_filename, nsfw_scores)
+        except Exception:
+            if verbose >= 2:
+                print("error!")
+            raise
+        if verbose >= 2:
+            print("success!")
 
     summary = SfwSummary(
         total=len(filepaths),

@@ -21,6 +21,9 @@
                 <button type="button" class="btn btn-dark" data-crop-row="{{ item.row_id }}">Crop</button>
                 <button type="button" class="btn btn-info" hx-post="/row/{{ item.row_id }}/shelve" hx-target="#row-{{ item.row_id }}" hx-swap="outerHTML">Shelve</button>
                 <button type="button" class="btn btn-danger" hx-delete="/row/{{ item.row_id }}" hx-target="#row-{{ item.row_id }}" hx-swap="outerHTML">Delete</button>
+                {% if item.nsfw_percentage is defined and item.nsfw_percentage is not none %}
+                    <span class="nsfw-score{% if item.nsfw_highlight %} filename-mismatch{% endif %}">NSFW {{ item.nsfw_percentage }}%</span>
+                {% endif %}
             </div>
         </div>
 

@@ -2430,6 +2430,8 @@ def test_review_cli_passes_provider_and_verbose(
             "provider": "qwen",
             "verbose": 2,
             "filename_glob": "sample-*.jpg",
+            "nsfw_show_threshold": 0.1,
+            "nsfw_highlight_threshold": 0.2,
         }
     ]
 

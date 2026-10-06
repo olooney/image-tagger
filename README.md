@@ -49,14 +49,14 @@ image-tagger quad [DIRECTORY]     # fill in missing perspective-corner metadata 
 image-tagger review [DIRECTORY]   # open interactive HTMX review app
 ```
 
-Or run this command to do all five in sequence:
+Or run this command to do all six in sequence:
 
 ```bash
 image-tagger run [DIRECTORY] [OPTIONS]
 ```
 
 `image-tagger run` passes its directory and options shared by the workflow commands to
-`convert`, `tag`, `rename`, and `review`; for example, use `image-tagger run uploads -vv`
+`convert`, `tag`, `rename`, `quad`, `sfw`, and `review`, in that order; for example, use `image-tagger run uploads -vv`
 for detailed output throughout the workflow.
 
 Next, you can run these individually as needed:
@@ -121,7 +121,8 @@ in a structured dataset. It also determines a clean filename for each image
 according to internal naming conventions. Multiple model providers are supported
 ([Download example CSV](https://olooney.github.io/image-tagger/docs/example/image_metadata.csv)).
 
-`image-tagger sfw` classifies every discovered image as SFW or NSFW.q
+`image-tagger sfw` classifies every discovered image as SFW or NSFW using OpenAI
+moderation by default. It populates `nsfw_score` in the metadata CSV.
 
 `image-tagger quad` calculates missing `quad` values for existing images with successful
 tag metadata. It skips rows whose files are missing or whose `quad` value is
@@ -134,7 +135,12 @@ techniques (Hough transforms and largest-quadrilateral contour detection) and a 
 
 `image-tagger review` pulls up an interactive HTMX app to review and correct the
 inferred tags and filenames. The review tool also allows you to shelve or delete
-images during the review process.
+images during the review process. Below the dimensions, it shows NSFW scores
+strictly above 10% as rounded whole percentages (for example, `NSFW 22%`), with a
+yellow highlight strictly above 20%. Missing or blank scores show no badge.
+Both `review` and `run` accept `--nsfw-show-threshold` (default `0.1`) and
+`--nsfw-highlight-threshold` (default `0.2`); thresholds are probabilities from
+`0` to `1`, checked before rounding.
 
 ![Image review interface](docs/review_screenshot.png)
 

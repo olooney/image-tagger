@@ -2,6 +2,7 @@ import fnmatch
 import html
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -9,6 +10,7 @@ import socket
 import time
 import webbrowser
 from contextlib import redirect_stdout
+from decimal import ROUND_HALF_UP, Decimal
 from io import StringIO
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -78,6 +80,8 @@ def set_review_metadata(
     provider: VisionModelProvider | str = VisionModelProvider.OPENAI,
     verbose: int = 1,
     filename_glob: str | None = None,
+    nsfw_show_threshold: float = 0.1,
+    nsfw_highlight_threshold: float = 0.2,
 ) -> None:
     """Set the metadata file used by the review app."""
     app.state.metadata_path = Path(metadata_filename)
@@ -85,6 +89,8 @@ def set_review_metadata(
     app.state.provider = VisionModelProvider(provider)
     app.state.verbose = verbose
     app.state.filename_glob = filename_glob
+    app.state.nsfw_show_threshold = nsfw_show_threshold
+    app.state.nsfw_highlight_threshold = nsfw_highlight_threshold
 
 
 def review_metadata_path() -> Path:
@@ -380,6 +386,28 @@ def review_items(metadata_path: Path) -> list[dict[str, Any]]:
         item["current_filename"] = image_path.name
         item["clean_filename"] = str(item.get("clean_filename", ""))
         item["quad"] = str(item.get("quad", "")).strip()
+        item["nsfw_percentage"] = None
+        item["nsfw_highlight"] = False
+        try:
+            nsfw_score = float(item.get("nsfw_score", ""))
+        except (TypeError, ValueError):
+            nsfw_score = float("nan")
+        if (
+            math.isfinite(nsfw_score)
+            and 0.0 <= nsfw_score <= 1.0
+            and nsfw_score > getattr(app.state, "nsfw_show_threshold", 0.1)
+        ):
+            item["nsfw_percentage"] = int(
+                (Decimal(str(nsfw_score)) * 100).quantize(
+                    Decimal("1"),
+                    rounding=ROUND_HALF_UP,
+                )
+            )
+            item["nsfw_highlight"] = nsfw_score > getattr(
+                app.state,
+                "nsfw_highlight_threshold",
+                0.2,
+            )
         with Image.open(image_path) as source_image:
             item["display_width"], item["display_height"] = source_image.size
         item["tags_text"] = "\n".join(
@@ -713,6 +741,8 @@ def review_metadata(
     verbose: int = 1,
     filename_glob: str | None = None,
     start_port: int = 8001,
+    nsfw_show_threshold: float = 0.1,
+    nsfw_highlight_threshold: float = 0.2,
 ) -> None:
     """Serve a local metadata review app and open it in a browser."""
     import uvicorn
@@ -737,6 +767,8 @@ def review_metadata(
         provider=provider,
         verbose=verbose,
         filename_glob=filename_glob,
+        nsfw_show_threshold=nsfw_show_threshold,
+        nsfw_highlight_threshold=nsfw_highlight_threshold,
     )
     port = first_available_port(start_port)
     url = f"http://127.0.0.1:{port}"
