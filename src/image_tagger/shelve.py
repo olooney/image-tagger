@@ -72,7 +72,7 @@ def rename_images(
     """Rename images from metadata suggestions."""
     csv_path = Path(csv_filename)
     ensure_metadata_review_ids(csv_path)
-    metadata_df = pd.read_csv(csv_path)
+    metadata_df = pd.read_csv(csv_path, keep_default_na=False)
     metadata_updated = False
     display_directory = csv_path.parent
     if verbose == 1:

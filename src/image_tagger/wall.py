@@ -189,7 +189,8 @@ def wall_metadata_titles(metadata_filename: Pathish | None) -> dict[str, str]:
         if item.get("status") != "ok":
             continue
 
-        item["tags"] = item["tags"].replace(";", ", ")
+        tags = item.get("tags", "")
+        item["tags"] = tags.replace(";", ", ") if isinstance(tags, str) else ""
         title = WALL_TITLE_TEMPLATE.format(**item)
 
         if not title:

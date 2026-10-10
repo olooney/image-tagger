@@ -2614,6 +2614,20 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
                 "description": "Mock description for square.jpg.",
             }
         )
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(nested_dir / "wide.png"),
+                "original_filename": "wide.png",
+                "width": "200",
+                "height": "100",
+                "clean_filename": "wide.png",
+                "category": "books",
+                "genre": "mock",
+                "tags": "",
+                "description": "Mock description for wide.png.",
+            }
+        )
 
     output = run_cli("wall", str(uploads_dir), "--no-preview")
 
@@ -3021,6 +3035,8 @@ def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
     uploads_dir.mkdir()
     source = uploads_dir / "image 234.jpg"
     source.touch()
+    image_without_clean_filename = uploads_dir / "untagged.jpg"
+    image_without_clean_filename.touch()
     metadata_filename = uploads_dir / "image_metadata.csv"
     with metadata_filename.open("w", newline="", encoding="utf-8") as metadata_file:
         writer = csv.DictWriter(metadata_file, fieldnames=csv_columns)
@@ -3033,11 +3049,20 @@ def test_rename_verbosity_one_prints_working_folder_and_relative_quoted_paths(
                 "clean_filename": "handwritten_note.jpg",
             }
         )
+        writer.writerow(
+            {
+                "status": "ok",
+                "original_filepath": str(image_without_clean_filename),
+                "original_filename": image_without_clean_filename.name,
+                "clean_filename": "",
+            }
+        )
 
     output = run_cli("rename", str(uploads_dir))
 
     assert output.splitlines()[0] == f"working in {quote_display_path(uploads_dir)}"
     assert 'renaming "image 234.jpg" to handwritten_note.jpg ...success!' in output
+    assert image_without_clean_filename.exists()
 
 
 def test_shelve_verbosity_one_prints_parent_folder_and_relative_quoted_paths(
