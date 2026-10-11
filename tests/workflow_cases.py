@@ -2628,6 +2628,14 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
                 "description": "Mock description for wide.png.",
             }
         )
+        writer.writerow(
+            {
+                "status": "error",
+                "original_filename": "failed.jpg",
+                "width": "",
+                "height": "",
+            }
+        )
 
     output = run_cli("wall", str(uploads_dir), "--no-preview")
 
@@ -2663,10 +2671,17 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert ".normalize('NFKD')" in html
     assert "terms.every((term) => searchText.includes(term))" in html
     assert "const closeSearch" in html
-    assert "event.key.toLowerCase() === 'f'" in html
-    assert "event.ctrlKey || event.metaKey" in html
+    assert "const key = event.key.toLowerCase()" in html
+    assert "if (key === 'f'" in html
+    assert "n: 'name'" in html
+    assert "d: 'date'" in html
+    assert "r: 'random'" in html
+    assert "g: 'grid'" in html
     assert "lightbox.classList.add('is-open')" in html
     assert "lightbox.classList.remove('is-open')" in html
+    assert 'class="lightbox-info-button order-button"' in html
+    assert "lightboxInfoText.textContent = image.title" in html
+    assert "if (key === 'i')" in html
     assert "event.key === 'ArrowLeft'" in html
     assert "event.key === 'ArrowRight'" in html
 
@@ -2781,6 +2796,42 @@ def test_wall_cli_orders_images_by_date_newest_first(
 
     html = (uploads_dir / "index.html").read_text(encoding="utf-8")
     assert html.index('src="a-newer.jpg"') < html.index('src="z-older.jpg"')
+
+
+def test_wall_cli_embeds_cached_similarity_data_and_order_controls(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Expose cached CLIP similarity and metadata to wall controls."""
+    uploads_dir = tmp_path / "uploads"
+    uploads_dir.mkdir()
+    image_paths = [uploads_dir / f"image-{index}.jpg" for index in range(4)]
+    for index, image_path in enumerate(image_paths):
+        Image.new("RGB", (100, 100), color=(index, index, index)).save(image_path)
+        os.utime(image_path, (100 + index, 100 + index))
+
+    entries = {}
+    vectors = np.eye(3, dtype=float)
+    for image_path, vector in zip(image_paths[:3], vectors, strict=True):
+        stat = image_path.stat()
+        entries[str(image_path.resolve())] = (stat.st_size, stat.st_mtime_ns, vector)
+    _save_embedding_cache(
+        uploads_dir / DEDUPE_EMBEDDINGS_FILENAME,
+        CLIP_MODEL,
+        EmbeddingCache(entries=entries, reviewed_thresholds={}),
+    )
+
+    run_cli("wall", str(uploads_dir), "--order", "name", "--no-preview")
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    similarity_match = re.search(r"window\.wallSimilarity = (\[.*?\]);", html)
+    assert similarity_match is not None
+    assert json.loads(similarity_match.group(1)) == np.eye(3).tolist()
+    assert html.count('class="order-button') == 4
+    assert 'data-filename="image-0.jpg"' in html
+    assert 'data-mtime-ns="100000000000"' in html
+    assert 'data-similarity-index="0"' in html
+    assert 'data-similarity-index=""' in html
 
 
 def test_clip_grid_wall_order_budgets_double_wide_and_empty_cells(

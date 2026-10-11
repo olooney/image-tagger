@@ -29,6 +29,7 @@
             width: min(22rem, calc(100vw - 1.5rem));
         }
         .search-panel.is-open { display: block; }
+        .search-row { position: relative; }
         .search-panel input {
             display: block;
             width: 100%;
@@ -75,6 +76,41 @@
             outline: 2px solid #fff;
             outline-offset: 2px;
         }
+        .search-controls {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.35rem;
+            margin-top: 0.35rem;
+        }
+        .order-button {
+            position: relative;
+            display: grid;
+            place-items: center;
+            width: 2rem;
+            height: 2rem;
+            padding: 0;
+            border: 1px solid rgb(255 255 255 / 28%);
+            border-radius: 0.2rem;
+            background: #111;
+            color: #fff;
+            font: 1rem/1 Georgia, 'Times New Roman', serif;
+            cursor: pointer;
+        }
+        .order-button:hover { background: #242424; }
+        .order-button[aria-pressed="true"] {
+            outline: 2px solid #fff;
+            outline-offset: 2px;
+        }
+        .order-button.is-busy { color: transparent; }
+        .order-button.is-busy::after {
+            position: absolute;
+            color: #fff;
+            content: '…';
+        }
+        .order-button:focus-visible {
+            outline: 2px solid #fff;
+            outline-offset: 2px;
+        }
         .wall {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(var(--cell-width), 1fr));
@@ -113,7 +149,6 @@
             display: none;
             place-items: center;
             padding: 1vmin;
-            border: 0;
             background: rgb(0 0 0 / 92%);
             cursor: zoom-out;
         }
@@ -125,32 +160,88 @@
             object-fit: contain;
             box-shadow: 0 1rem 4rem rgb(0 0 0 / 55%);
         }
+        .lightbox-info {
+            position: absolute;
+            right: 0.75rem;
+            bottom: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.35rem;
+            cursor: default;
+        }
+        .lightbox-info-text {
+            width: max(10vw, min(500px, calc(100vw - 1.5rem)));
+            max-width: calc(100vw - 1.5rem);
+            max-height: calc(100vh - 4.5rem);
+            margin: 0;
+            padding: 0.6rem;
+            overflow: auto;
+            border: 1px solid rgb(255 255 255 / 28%);
+            border-radius: 0.2rem;
+            background: #111;
+            color: #fff;
+            font: 0.85rem/1.35 ui-monospace, Consolas, monospace;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+        .lightbox-info-text[hidden] { display: none; }
+        .lightbox-info-button {
+            font-style: normal;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <form class="search-panel" role="search" aria-label="Search image wall">
-        <input type="search" aria-label="Search filenames and titles" autocomplete="off" spellcheck="false">
-        <button class="search-close" type="button" aria-label="Clear and close search"></button>
+        <div class="search-row">
+            <input type="search" aria-label="Search filenames and titles" autocomplete="off" spellcheck="false">
+            <button class="search-close" type="button" aria-label="Clear and close search"></button>
+        </div>
+        <div class="search-controls" aria-label="Image order">
+            <button class="order-button" type="button" data-order="name" aria-label="Sort by filename" title="Sort by filename">Ⓐ</button>
+            <button class="order-button" type="button" data-order="date" aria-label="Sort chronologically" title="Sort chronologically">◷</button>
+            <button class="order-button" type="button" data-order="random" aria-label="Randomize order" title="Randomize order">⤨</button>
+            {% if show_grid_control %}<button class="order-button" type="button" data-order="grid" aria-label="Arrange similarity grid" title="Arrange similarity grid">▦</button>{% endif %}
+        </div>
     </form>
     <main class="wall" aria-label="Image wall">
         {% for item in items %}
             <button class="tile{% if item.is_double_wide %} double-wide{% endif %}" type="button">
-                <img src="{{ item.src }}" alt="{{ item.alt }}" title="{{ item.title }}" loading="lazy">
+                <img src="{{ item.src }}" alt="{{ item.alt }}" title="{{ item.title }}" loading="lazy" data-filename="{{ item.alt }}" data-mtime-ns="{{ item.mtime_ns }}" data-similarity-index="{% if item.similarity_index is not none %}{{ item.similarity_index }}{% endif %}">
             </button>
         {% endfor %}
     </main>
-    <button class="lightbox" type="button" aria-label="Close full-size image">
+    <div class="lightbox" role="dialog" aria-modal="true" aria-label="Full-size image">
         <img alt="">
-    </button>
+        <div class="lightbox-info">
+            <pre class="lightbox-info-text" hidden></pre>
+            <button class="lightbox-info-button order-button" type="button" aria-label="Toggle image information" aria-expanded="false" title="Image information">i</button>
+        </div>
+    </div>
     <script>
+        window.wallSimilarity = {{ similarity_matrix | tojson }};
+
         const searchPanel = document.querySelector('.search-panel');
         const searchInput = searchPanel.querySelector('input');
         const searchCloseButton = searchPanel.querySelector('.search-close');
+        const orderButtons = Array.from(searchPanel.querySelectorAll('.order-button'));
         const wall = document.querySelector('.wall');
         const lightbox = document.querySelector('.lightbox');
         const lightboxImage = lightbox.querySelector('img');
+        const lightboxInfoButton = lightbox.querySelector('.lightbox-info-button');
+        const lightboxInfoText = lightbox.querySelector('.lightbox-info-text');
         const tiles = Array.from(document.querySelectorAll('.tile'));
+        const tileMetadata = (tile) => tile.querySelector('img').dataset;
+        const tileIndices = new Map(tiles.map((tile, index) => [tile, index]));
+        const gridButton = searchPanel.querySelector('[data-order="grid"]');
+        let orderedTiles = [...tiles];
         let activeTile = null;
+        let gridWorker = null;
+        let gridCache = null;
+        let pendingGrid = null;
+        let gridRequestId = 0;
+        let gridVersion = 0;
         let resizeFrame = 0;
 
         const ASCII_EQUIVALENTS = {
@@ -219,13 +310,13 @@
             .length;
 
         const arrangeTiles = () => {
-            tiles.forEach((tile) => wall.append(tile));
+            orderedTiles.forEach((tile) => wall.append(tile));
             const columnCount = getColumnCount();
             if (columnCount < 2) {
                 return;
             }
 
-            const visibleTiles = tiles.filter((tile) => !tile.classList.contains('is-hidden'));
+            const visibleTiles = orderedTiles.filter((tile) => !tile.classList.contains('is-hidden'));
             const arrangedTiles = [...visibleTiles];
             let realIndex = 0;
             arrangedTiles.forEach((tile, index) => {
@@ -245,12 +336,363 @@
             });
 
             arrangedTiles.forEach((tile) => wall.append(tile));
-            tiles
+            orderedTiles
                 .filter((tile) => tile.classList.contains('is-hidden'))
                 .forEach((tile) => wall.append(tile));
         };
 
+        const calculateGridOrder = (similarity, sourceItems, columnCount) => {
+            const dot = (left, right) => left.reduce(
+                (total, value, index) => total + value * right[index],
+                0,
+            );
+            const orthogonalize = (vector, basis) => {
+                const result = [...vector];
+                basis.forEach((axis) => {
+                    const projection = dot(result, axis);
+                    result.forEach((unused, index) => {
+                        result[index] -= projection * axis[index];
+                    });
+                });
+                const norm = Math.hypot(...result);
+                return norm > 1e-10 ? result.map((value) => value / norm) : null;
+            };
+            const spectralAxis = (matrix, seed, basis) => {
+                let axis = orthogonalize(
+                    matrix.map((unused, index) => Math.sin((index + 1) * seed)),
+                    basis,
+                );
+                if (!axis) {
+                    return matrix.map(
+                        (unused, index) => index / Math.max(1, matrix.length - 1),
+                    );
+                }
+                for (let iteration = 0; iteration < 60; iteration += 1) {
+                    const multiplied = matrix.map((row) => dot(row, axis));
+                    const nextAxis = orthogonalize(multiplied, basis);
+                    if (!nextAxis) {
+                        break;
+                    }
+                    axis = nextAxis;
+                }
+                return axis;
+            };
+            const scaleAxis = (values, extent) => {
+                const minimum = Math.min(...values);
+                const maximum = Math.max(...values);
+                if (maximum - minimum < 1e-10) {
+                    return values.map(() => extent / 2);
+                }
+                return values.map(
+                    (value) => (value - minimum) / (maximum - minimum) * extent,
+                );
+            };
+            const hungarianAssignment = (costs) => {
+                const rowCount = costs.length;
+                const cellCount = costs[0].length;
+                const rowPotentials = Array(rowCount + 1).fill(0);
+                const cellPotentials = Array(cellCount + 1).fill(0);
+                const matchedRow = Array(cellCount + 1).fill(0);
+                const previousCell = Array(cellCount + 1).fill(0);
+
+                for (let row = 1; row <= rowCount; row += 1) {
+                    matchedRow[0] = row;
+                    let cell = 0;
+                    const minimums = Array(cellCount + 1).fill(Infinity);
+                    const used = Array(cellCount + 1).fill(false);
+                    do {
+                        used[cell] = true;
+                        const currentRow = matchedRow[cell];
+                        let delta = Infinity;
+                        let nextCell = 0;
+                        for (let candidate = 1; candidate <= cellCount; candidate += 1) {
+                            if (used[candidate]) {
+                                continue;
+                            }
+                            const cost = costs[currentRow - 1][candidate - 1]
+                                - rowPotentials[currentRow]
+                                - cellPotentials[candidate];
+                            if (cost < minimums[candidate]) {
+                                minimums[candidate] = cost;
+                                previousCell[candidate] = cell;
+                            }
+                            if (minimums[candidate] < delta) {
+                                delta = minimums[candidate];
+                                nextCell = candidate;
+                            }
+                        }
+                        for (let candidate = 0; candidate <= cellCount; candidate += 1) {
+                            if (used[candidate]) {
+                                rowPotentials[matchedRow[candidate]] += delta;
+                                cellPotentials[candidate] -= delta;
+                            } else {
+                                minimums[candidate] -= delta;
+                            }
+                        }
+                        cell = nextCell;
+                    } while (matchedRow[cell] !== 0);
+
+                    do {
+                        const priorCell = previousCell[cell];
+                        matchedRow[cell] = matchedRow[priorCell];
+                        cell = priorCell;
+                    } while (cell !== 0);
+                }
+
+                const assignment = Array(rowCount).fill(0);
+                for (let cell = 1; cell <= cellCount; cell += 1) {
+                    if (matchedRow[cell] > 0) {
+                        assignment[matchedRow[cell] - 1] = cell - 1;
+                    }
+                }
+                return assignment;
+            };
+
+            const indexedItems = sourceItems.filter(
+                (item) => item.similarityIndex !== null,
+            );
+            if (indexedItems.length < 2) {
+                return sourceItems.map((item) => item.sourceIndex);
+            }
+            const expandedItems = indexedItems.flatMap(
+                (item) => item.isDoubleWide ? [item, item] : [item],
+            );
+            const matrix = expandedItems.map((left) => expandedItems.map(
+                (right) => similarity[left.similarityIndex][right.similarityIndex],
+            ));
+            const constantAxis = matrix.map(() => 1 / Math.sqrt(matrix.length));
+            const xAxis = spectralAxis(matrix, 1.7, [constantAxis]);
+            const yAxis = spectralAxis(matrix, 2.9, [constantAxis, xAxis]);
+            const rowCount = Math.ceil(expandedItems.length / columnCount);
+            const xCoordinates = scaleAxis(xAxis, columnCount - 1);
+            const yCoordinates = scaleAxis(yAxis, rowCount - 1);
+            const costs = matrix.map((unused, imageIndex) => Array.from(
+                { length: rowCount * columnCount },
+                (unusedCell, cellIndex) => {
+                    const xDistance = xCoordinates[imageIndex] - cellIndex % columnCount;
+                    const yDistance = yCoordinates[imageIndex]
+                        - Math.floor(cellIndex / columnCount);
+                    return xDistance * xDistance + yDistance * yDistance;
+                },
+            ));
+            const assignments = hungarianAssignment(costs);
+            const assignedCells = new Map();
+            expandedItems.forEach((item, index) => {
+                assignedCells.set(
+                    item.sourceIndex,
+                    Math.min(
+                        assignments[index],
+                        assignedCells.get(item.sourceIndex) ?? Infinity,
+                    ),
+                );
+            });
+            const optimizedItems = [...indexedItems].sort(
+                (left, right) => assignedCells.get(left.sourceIndex)
+                    - assignedCells.get(right.sourceIndex),
+            );
+            const indexedSources = new Set(
+                indexedItems.map((item) => item.sourceIndex),
+            );
+            return [
+                ...optimizedItems.map((item) => item.sourceIndex),
+                ...sourceItems
+                    .filter((item) => !indexedSources.has(item.sourceIndex))
+                    .map((item) => item.sourceIndex),
+            ];
+        };
+
+        const createGridWorker = () => {
+            if (!window.Worker) {
+                return null;
+            }
+            const workerSource = `
+                const calculateGridOrder = ${calculateGridOrder.toString()};
+                let similarity = [];
+                self.addEventListener('message', (event) => {
+                    if (event.data.type === 'initialize') {
+                        similarity = event.data.similarity;
+                        return;
+                    }
+                    const sourceOrder = calculateGridOrder(
+                        similarity,
+                        event.data.sourceItems,
+                        event.data.columnCount,
+                    );
+                    self.postMessage({ requestId: event.data.requestId, sourceOrder });
+                });
+            `;
+            const workerUrl = URL.createObjectURL(
+                new Blob([workerSource], { type: 'text/javascript' }),
+            );
+            const worker = new Worker(workerUrl);
+            URL.revokeObjectURL(workerUrl);
+            worker.postMessage({ type: 'initialize', similarity: window.wallSimilarity });
+            worker.addEventListener('message', completeGridCalculation);
+            return worker;
+        };
+
+        const setGridBusy = (isBusy) => {
+            if (!gridButton) {
+                return;
+            }
+            gridButton.classList.toggle('is-busy', isBusy);
+            gridButton.setAttribute('aria-busy', String(isBusy));
+        };
+
+        const gridSourceKey = (sourceTiles, columnCount) => `${columnCount}:${
+            sourceTiles
+                .map((tile) => tileIndices.get(tile))
+                .sort((left, right) => left - right)
+                .join(',')
+        }`;
+
+        const gridSourceItems = (sourceTiles) => sourceTiles.map((tile, sourceIndex) => {
+            const rawSimilarityIndex = tileMetadata(tile).similarityIndex;
+            return {
+                sourceIndex,
+                similarityIndex: rawSimilarityIndex === ''
+                    ? null
+                    : Number(rawSimilarityIndex),
+                isDoubleWide: tile.classList.contains('double-wide'),
+            };
+        });
+
+        const applyGridOrder = (sourceTiles, gridOrder) => {
+            const gridSet = new Set(sourceTiles);
+            orderedTiles = [
+                ...gridOrder,
+                ...orderedTiles.filter((tile) => !gridSet.has(tile)),
+            ];
+            arrangeTiles();
+        };
+
+        function completeGridCalculation(event) {
+            if (
+                !pendingGrid
+                || event.data.requestId !== pendingGrid.requestId
+                || pendingGrid.version !== gridVersion
+            ) {
+                return;
+            }
+            const completedRequest = pendingGrid;
+            const gridOrder = event.data.sourceOrder.map(
+                (sourceIndex) => completedRequest.sourceTiles[sourceIndex],
+            );
+            gridCache = { key: completedRequest.key, gridOrder };
+            pendingGrid = null;
+            setGridBusy(false);
+            if (completedRequest.isExplicit) {
+                applyGridOrder(completedRequest.sourceTiles, gridOrder);
+            }
+        }
+
+        const requestGridCalculation = (sourceTiles, isExplicit) => {
+            const columnCount = getColumnCount();
+            const key = gridSourceKey(sourceTiles, columnCount);
+            if (gridCache?.key === key) {
+                if (isExplicit) {
+                    applyGridOrder(sourceTiles, gridCache.gridOrder);
+                }
+                return;
+            }
+            if (pendingGrid?.key === key) {
+                pendingGrid.isExplicit ||= isExplicit;
+                setGridBusy(pendingGrid.isExplicit);
+                return;
+            }
+            if (pendingGrid) {
+                gridWorker?.terminate();
+                gridWorker = null;
+                pendingGrid = null;
+            }
+
+            const requestId = ++gridRequestId;
+            pendingGrid = {
+                requestId,
+                key,
+                version: gridVersion,
+                sourceTiles,
+                isExplicit,
+            };
+            setGridBusy(isExplicit);
+            const sourceItems = gridSourceItems(sourceTiles);
+            gridWorker ||= createGridWorker();
+            if (gridWorker) {
+                gridWorker.postMessage({
+                    type: 'calculate',
+                    requestId,
+                    sourceItems,
+                    columnCount,
+                });
+                return;
+            }
+            setTimeout(() => {
+                completeGridCalculation({
+                    data: {
+                        requestId,
+                        sourceOrder: calculateGridOrder(
+                            window.wallSimilarity,
+                            sourceItems,
+                            columnCount,
+                        ),
+                    },
+                });
+            }, 0);
+        };
+
+        const invalidateGridCalculation = () => {
+            gridVersion += 1;
+            gridCache = null;
+            pendingGrid = null;
+            setGridBusy(false);
+            gridWorker?.terminate();
+            gridWorker = null;
+        };
+
+        const setActiveOrder = (order) => {
+            orderButtons.forEach((button) => {
+                button.setAttribute('aria-pressed', String(button.dataset.order === order));
+            });
+        };
+
+        const orderTiles = (order) => {
+            if (pendingGrid) {
+                pendingGrid.isExplicit = false;
+            }
+            setGridBusy(false);
+            if (order === 'name') {
+                orderedTiles.sort((left, right) => tileMetadata(left).filename
+                    .toLowerCase()
+                    .localeCompare(tileMetadata(right).filename.toLowerCase()));
+            } else if (order === 'date') {
+                orderedTiles.sort(
+                    (left, right) => Number(
+                        BigInt(tileMetadata(right).mtimeNs)
+                        - BigInt(tileMetadata(left).mtimeNs),
+                    ),
+                );
+            } else if (order === 'random') {
+                for (let index = orderedTiles.length - 1; index > 0; index -= 1) {
+                    const otherIndex = Math.floor(Math.random() * (index + 1));
+                    [orderedTiles[index], orderedTiles[otherIndex]] = [
+                        orderedTiles[otherIndex],
+                        orderedTiles[index],
+                    ];
+                }
+            } else if (order === 'grid') {
+                setActiveOrder(order);
+                requestGridCalculation(
+                    orderedTiles.filter((tile) => !tile.classList.contains('is-hidden')),
+                    true,
+                );
+                return;
+            }
+            arrangeTiles();
+            setActiveOrder(order);
+        };
+
         const arrangeTilesOnResize = () => {
+            invalidateGridCalculation();
             cancelAnimationFrame(resizeFrame);
             resizeFrame = requestAnimationFrame(arrangeTiles);
         };
@@ -273,12 +715,24 @@
             activeTile = tile;
             lightboxImage.src = image.currentSrc || image.src;
             lightboxImage.alt = image.alt;
+            lightboxInfoText.textContent = image.title;
             lightbox.classList.add('is-open');
+        };
+
+        const setLightboxInfoOpen = (isOpen) => {
+            lightboxInfoText.hidden = !isOpen;
+            lightboxInfoButton.setAttribute('aria-expanded', String(isOpen));
+        };
+
+        const toggleLightboxInfo = () => {
+            setLightboxInfoOpen(lightboxInfoText.hidden);
         };
 
         const closeLightbox = () => {
             lightbox.classList.remove('is-open');
             lightboxImage.removeAttribute('src');
+            lightboxInfoText.textContent = '';
+            setLightboxInfoOpen(false);
             activeTile = null;
         };
 
@@ -300,7 +754,12 @@
 
         searchCloseButton.addEventListener('click', closeSearch);
 
+        orderButtons.forEach((button) => {
+            button.addEventListener('click', () => orderTiles(button.dataset.order));
+        });
+
         document.addEventListener('keydown', (event) => {
+            const key = event.key.toLowerCase();
             if (lightbox.classList.contains('is-open')) {
                 if (event.key === 'Escape') {
                     closeLightbox();
@@ -314,20 +773,47 @@
                     moveLightbox(1);
                     return;
                 }
-            }
-            if (event.key === 'Escape') {
-                closeSearch();
+                if (key === 'i') {
+                    toggleLightboxInfo();
+                }
                 return;
             }
-            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+            if (event.key === 'Escape') {
+                if (searchPanel.classList.contains('is-open')) {
+                    closeSearch();
+                } else {
+                    openSearch();
+                }
+                return;
+            }
+            const isTyping = event.target instanceof HTMLInputElement
+                || event.target instanceof HTMLTextAreaElement;
+            if (key === 'f' && (!isTyping || event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
                 openSearch();
+                return;
+            }
+            if (isTyping || event.ctrlKey || event.metaKey || event.altKey) {
+                return;
+            }
+            const shortcutOrders = {
+                n: 'name',
+                d: 'date',
+                r: 'random',
+                g: 'grid',
+            };
+            const order = shortcutOrders[key];
+            if (order && (order !== 'grid' || gridButton)) {
+                orderTiles(order);
             }
         });
 
         window.addEventListener('resize', arrangeTilesOnResize);
 
         arrangeTiles();
+        if (gridButton) {
+            requestGridCalculation([...tiles], false);
+        }
 
         document.querySelectorAll('.tile img').forEach((image) => {
             image.addEventListener('click', () => {
@@ -335,8 +821,14 @@
             });
         });
 
-        lightbox.addEventListener('click', () => {
-            closeLightbox();
+        lightboxInfoButton.addEventListener('click', () => {
+            toggleLightboxInfo();
+        });
+
+        lightbox.addEventListener('click', (event) => {
+            if (!event.target.closest('.lightbox-info')) {
+                closeLightbox();
+            }
         });
     </script>
 </body>

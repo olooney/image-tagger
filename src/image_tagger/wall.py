@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
 
-from .compare import embed_image_paths
+from .compare import _load_embedding_cache, embed_image_paths
 from .constants import (
     CLIP_MODEL,
     DEFAULT_WALL_ASSUMED_COLUMNS,
@@ -189,6 +189,15 @@ def wall_metadata_titles(metadata_filename: Pathish | None) -> dict[str, str]:
         if item.get("status") != "ok":
             continue
 
+        for dimension in ["width", "height"]:
+            value = item.get(dimension)
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric_value) and numeric_value.is_integer():
+                item[dimension] = int(numeric_value)
+
         tags = item.get("tags", "")
         item["tags"] = tags.replace(";", ", ") if isinstance(tags, str) else ""
         title = WALL_TITLE_TEMPLATE.format(**item)
@@ -203,6 +212,51 @@ def wall_metadata_titles(metadata_filename: Pathish | None) -> dict[str, str]:
                 titles[os.fspath(Path(value))] = title
 
     return titles
+
+
+def cached_wall_similarity(
+    filepaths: list[Path],
+    directory: Path,
+) -> tuple[list[list[float]], dict[Path, int]]:
+    """Return cosine similarities for fresh cached wall embeddings."""
+    cache = _load_embedding_cache(
+        directory / DEDUPE_EMBEDDINGS_FILENAME,
+        CLIP_MODEL,
+    )
+    cached_paths: list[Path] = []
+    cached_vectors: list[np.ndarray] = []
+    vector_shape: tuple[int, ...] | None = None
+    for filepath in filepaths:
+        entry = cache.entries.get(str(filepath.resolve()))
+        if entry is None:
+            continue
+        size, mtime_ns, vector = entry
+        stat = filepath.stat()
+        vector_array = np.asarray(vector, dtype=np.float64)
+        if (
+            (size, mtime_ns) != (stat.st_size, stat.st_mtime_ns)
+            or vector_array.ndim != 1
+            or not np.isfinite(vector_array).all()
+            or np.linalg.norm(vector_array) == 0
+        ):
+            continue
+        if vector_shape is None:
+            vector_shape = vector_array.shape
+        if vector_array.shape != vector_shape:
+            continue
+        cached_paths.append(filepath)
+        cached_vectors.append(vector_array)
+
+    if len(cached_paths) <= len(filepaths) / 2:
+        return [], {}
+
+    vectors = np.vstack(cached_vectors)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+    similarities = np.clip(vectors @ vectors.T, -1.0, 1.0)
+    similarity_indices = {
+        filepath: index for index, filepath in enumerate(cached_paths)
+    }
+    return similarities.round(6).tolist(), similarity_indices
 
 
 def generate_wall(
@@ -265,6 +319,10 @@ def generate_wall(
     cell_width = 200
     cell_height = round(cell_width / aspect_ratio)
     metadata_titles = wall_metadata_titles(metadata_filename)
+    similarity_matrix, similarity_indices = cached_wall_similarity(
+        filepaths,
+        directory_path,
+    )
     items = [
         {
             "src": Path(os.path.relpath(filepath, output_path.parent)).as_posix(),
@@ -274,6 +332,8 @@ def generate_wall(
                 metadata_titles.get(filepath.name, filepath.name),
             ),
             "is_double_wide": filepath in double_wide_paths,
+            "mtime_ns": filepath.stat().st_mtime_ns,
+            "similarity_index": similarity_indices.get(filepath),
         }
         for filepath in filepaths
     ]
@@ -289,6 +349,8 @@ def generate_wall(
         cell_width=cell_width,
         cell_height=cell_height,
         wall_title=title or wall_title_from_directory(directory_path),
+        similarity_matrix=similarity_matrix,
+        show_grid_control=bool(similarity_matrix),
     )
     if not dry_run:
         output_path.write_text(output, encoding="utf-8")
