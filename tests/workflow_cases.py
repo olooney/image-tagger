@@ -2667,6 +2667,20 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert 'title="wider.jpg"' in html
     assert str(uploads_dir) not in html
     assert 'class="search-panel"' in html
+    assert 'type="range"' in html
+    assert 'aria-label="Wall columns"' in html
+    assert ".zoom-control {\n            flex: 1;" in html
+    assert '.zoom-control input[type="range"] {\n            flex: 1;' in html
+    assert "const setCellWidth" in html
+    assert "const setColumnCount" in html
+    assert "const zoomByColumns" in html
+    assert "const maximumColumnCount = 60;" in html
+    assert "getColumnCount() - direction" in html
+    assert "style.setProperty('--cell-width'" in html
+    assert "style.setProperty('--cell-height'" in html
+    assert "const isZoomShortcut" in html
+    assert "window.addEventListener('wheel'" in html
+    assert "{ passive: false }" in html
     assert "const ASCII_EQUIVALENTS" in html
     assert ".normalize('NFKD')" in html
     assert "terms.every((term) => searchText.includes(term))" in html

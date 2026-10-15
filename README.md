@@ -67,6 +67,7 @@ image-tagger shelve [DIRECTORY]   # distribute files across configured directori
 image-tagger dedupe [DIRECTORY]   # identify and automatically remove duplicates
 image-tagger wall [DIRECTORY]     # generate a mood-board-style image wall
 image-tagger gallery [DIRECTORY]  # show images and details side-by-side
+image-tagger thumbnail [DIRECTORY] DESTINATION  # create a publishable collection copy
 image-tagger report [DIRECTORY]   # summary statistics and problems
 image-tagger prune [DIRECTORY]    # clean up meta data
 ```
@@ -164,11 +165,13 @@ under `DIRECTORY`. It uses relative image paths, computes a median image aspect
 ratio up front, and displays the images in equal-sized grid cells with a
 click-to-open full-size overlay
 ([example](https://olooney.github.io/image-tagger/docs/example/wall.html)).
-
 Experimental: use `--order grid` with `wall` to arrange the wall by CLIP similarity.
 This attempts to put semantically related images close together. Whether this results
 in more or less interesting image walls is debatable, but clusters are apparent in
 the output.
+
+`image-tagger thumbnail` copies a directory of images and their metadata to a new
+directory, converting each image into a smaller thumbnail.
 
 `image-tagger gallery` produces a static HTML version of the review tool showing the
 image and its inferred metadata side-by-side

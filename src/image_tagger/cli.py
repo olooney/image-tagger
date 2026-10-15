@@ -40,6 +40,7 @@ from .tagging import (
     tag_images,
     update_metadata_filepaths,
 )
+from .thumbnail import DEFAULT_MAX_HEIGHT, DEFAULT_MAX_WIDTH, create_thumbnails
 from .util import preview, quote_display_path
 from .util import scramble as scramble_name
 from .vision import VisionModelProvider
@@ -169,6 +170,18 @@ def convert(args: argparse.Namespace) -> None:
         update_metadata_filepaths(args.metadata_filename, file_changes)
     if args.verbose >= 1:
         print(format_extension_counts(count_files_by_extension(directory)))
+
+
+def thumbnail(args: argparse.Namespace) -> None:
+    """Create a size-limited collection copy for publishing."""
+    create_thumbnails(
+        args.directory,
+        args.destination,
+        max_width=args.max_width,
+        max_height=args.max_height,
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+    )
 
 
 def tag(args: argparse.Namespace) -> None:
@@ -492,6 +505,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert_parser.set_defaults(func=convert)
 
+    thumbnail_parser = subparsers.add_parser(
+        "thumbnail",
+        help="Create a size-limited collection copy for publishing.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_common_upload_args(thumbnail_parser)
+    thumbnail_parser.add_argument("destination", type=path_arg)
+    thumbnail_parser.add_argument(
+        "--max-width",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_WIDTH,
+        help="Maximum output image width in pixels.",
+    )
+    thumbnail_parser.add_argument(
+        "--max-height",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_HEIGHT,
+        help="Maximum output image height in pixels.",
+    )
+    thumbnail_parser.set_defaults(func=thumbnail)
+
     dedupe_parser = subparsers.add_parser(
         "dedupe",
         help="Remove duplicate uploads with CLIP and optional LLM checks.",
@@ -759,6 +793,11 @@ def main() -> None:
     else:
         args.directory = (
             args.stackmap_config.directory_for(str(args.directory)) or args.directory
+        )
+    if args.command == "thumbnail":
+        args.destination = (
+            args.stackmap_config.directory_for(str(args.destination))
+            or args.destination
         )
     if args.metadata_filename is None:
         args.metadata_filename = args.directory / METADATA_FILENAME.name

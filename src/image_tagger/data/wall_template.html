@@ -30,7 +30,7 @@
         }
         .search-panel.is-open { display: block; }
         .search-row { position: relative; }
-        .search-panel input {
+        .search-panel input[type="search"] {
             display: block;
             width: 100%;
             height: 2rem;
@@ -41,7 +41,7 @@
             color: #fff;
             font: 1rem/1.2 Georgia, 'Times New Roman', serif;
         }
-        .search-panel input:focus {
+        .search-panel input[type="search"]:focus {
             outline: 2px solid #fff;
             outline-offset: 2px;
         }
@@ -78,9 +78,30 @@
         }
         .search-controls {
             display: flex;
+            align-items: center;
             justify-content: flex-end;
             gap: 0.35rem;
             margin-top: 0.35rem;
+        }
+        .zoom-control {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            min-width: 0;
+            height: 2rem;
+            padding: 0 0.45rem;
+            border: 1px solid rgb(255 255 255 / 28%);
+            border-radius: 0.2rem;
+            background: #111;
+            color: #fff;
+        }
+        .zoom-control input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            accent-color: #fff;
+            cursor: pointer;
+            direction: rtl;
         }
         .order-button {
             position: relative;
@@ -198,7 +219,12 @@
             <input type="search" aria-label="Search filenames and titles" autocomplete="off" spellcheck="false">
             <button class="search-close" type="button" aria-label="Clear and close search"></button>
         </div>
-        <div class="search-controls" aria-label="Image order">
+        <div class="search-controls" aria-label="Wall controls">
+            <label class="zoom-control" title="Cell size">
+                <span aria-hidden="true">−</span>
+                <input type="range" min="1" max="60" step="1" value="1" aria-label="Wall columns">
+                <span aria-hidden="true">+</span>
+            </label>
             <button class="order-button" type="button" data-order="name" aria-label="Sort by filename" title="Sort by filename">Ⓐ</button>
             <button class="order-button" type="button" data-order="date" aria-label="Sort chronologically" title="Sort chronologically">◷</button>
             <button class="order-button" type="button" data-order="random" aria-label="Randomize order" title="Randomize order">⤨</button>
@@ -225,6 +251,7 @@
         const searchPanel = document.querySelector('.search-panel');
         const searchInput = searchPanel.querySelector('input');
         const searchCloseButton = searchPanel.querySelector('.search-close');
+        const zoomInput = searchPanel.querySelector('.zoom-control input');
         const orderButtons = Array.from(searchPanel.querySelectorAll('.order-button'));
         const wall = document.querySelector('.wall');
         const lightbox = document.querySelector('.lightbox');
@@ -243,6 +270,12 @@
         let gridRequestId = 0;
         let gridVersion = 0;
         let resizeFrame = 0;
+        const initialCellWidth = {{ cell_width }};
+        const initialCellHeight = {{ cell_height }};
+        const maximumColumnCount = 60;
+        const minimumColumnCount = tiles.some(
+            (tile) => tile.classList.contains('double-wide'),
+        ) ? 2 : 1;
 
         const ASCII_EQUIVALENTS = {
             'ß': 'ss',
@@ -694,7 +727,40 @@
         const arrangeTilesOnResize = () => {
             invalidateGridCalculation();
             cancelAnimationFrame(resizeFrame);
-            resizeFrame = requestAnimationFrame(arrangeTiles);
+            resizeFrame = requestAnimationFrame(() => {
+                arrangeTiles();
+                syncZoomInput();
+            });
+        };
+
+        const setCellWidth = (requestedWidth) => {
+            const cellWidth = Math.max(1, Number(requestedWidth));
+            const cellHeight = Math.round(
+                cellWidth * initialCellHeight / initialCellWidth,
+            );
+            document.documentElement.style.setProperty('--cell-width', `${cellWidth}px`);
+            document.documentElement.style.setProperty('--cell-height', `${cellHeight}px`);
+            arrangeTilesOnResize();
+        };
+
+        const syncZoomInput = () => {
+            zoomInput.min = String(minimumColumnCount);
+            zoomInput.max = String(maximumColumnCount);
+            zoomInput.value = String(getColumnCount());
+        };
+
+        const setColumnCount = (requestedCount) => {
+            const columnCount = Math.max(
+                minimumColumnCount,
+                Math.min(maximumColumnCount, Math.round(Number(requestedCount))),
+            );
+            const cellWidth = (wall.clientWidth - 0.5) / columnCount;
+            setCellWidth(cellWidth);
+            zoomInput.value = String(columnCount);
+        };
+
+        const zoomByColumns = (direction) => {
+            setColumnCount(getColumnCount() - direction);
         };
 
         const openSearch = () => {
@@ -752,6 +818,8 @@
 
         searchInput.addEventListener('input', filterTiles);
 
+        zoomInput.addEventListener('input', () => setColumnCount(zoomInput.value));
+
         searchCloseButton.addEventListener('click', closeSearch);
 
         orderButtons.forEach((button) => {
@@ -760,6 +828,19 @@
 
         document.addEventListener('keydown', (event) => {
             const key = event.key.toLowerCase();
+            const hasZoomModifier = event.ctrlKey || event.metaKey;
+            const isZoomShortcut = hasZoomModifier
+                && ['+', '=', '-', '_', '0'].includes(event.key);
+            if (isZoomShortcut) {
+                event.preventDefault();
+                if (event.key === '0') {
+                    setCellWidth(initialCellWidth);
+                } else {
+                    const direction = ['+', '='].includes(event.key) ? 1 : -1;
+                    zoomByColumns(direction);
+                }
+                return;
+            }
             if (lightbox.classList.contains('is-open')) {
                 if (event.key === 'Escape') {
                     closeLightbox();
@@ -808,9 +889,19 @@
             }
         });
 
+        window.addEventListener('wheel', (event) => {
+            if (!event.ctrlKey && !event.metaKey) {
+                return;
+            }
+            event.preventDefault();
+            const direction = event.deltaY < 0 ? 1 : -1;
+            zoomByColumns(direction);
+        }, { passive: false });
+
         window.addEventListener('resize', arrangeTilesOnResize);
 
         arrangeTiles();
+    syncZoomInput();
         if (gridButton) {
             requestGridCalculation([...tiles], false);
         }
