@@ -2674,8 +2674,11 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "const setCellWidth" in html
     assert "const setColumnCount" in html
     assert "const zoomByColumns" in html
+    assert "const formatColumnCount" in html
     assert "const maximumColumnCount = 60;" in html
-    assert "getColumnCount() - direction" in html
+    assert "level < currentColumnCount" in html
+    assert "level > currentColumnCount" in html
+    assert "window.wallZoomLevels = [];" in html
     assert "style.setProperty('--cell-width'" in html
     assert "style.setProperty('--cell-height'" in html
     assert "const isZoomShortcut" in html
@@ -2759,6 +2762,25 @@ def test_wall_cli_allows_configuring_double_wide_threshold(
 
     html = (uploads_dir / "index.html").read_text(encoding="utf-8")
     assert html.count('class="tile double-wide"') == 1
+
+
+def test_wall_cli_can_limit_zoom_to_1260_divisors(
+    tmp_path: Path,
+    run_cli: Callable[..., str],
+) -> None:
+    """Embed the requested divisor-only wall zoom levels when enabled."""
+    uploads_dir = tmp_path / "books"
+    uploads_dir.mkdir()
+    Image.new("RGB", (100, 100)).save(uploads_dir / "cover.jpg")
+
+    run_cli("wall", str(uploads_dir), "--divisible-zoom", "--no-preview")
+
+    html = (uploads_dir / "index.html").read_text(encoding="utf-8")
+    assert (
+        "window.wallZoomLevels = "
+        "[2, 3, 4, 5, 6, 7, 9, 10, 12, 14, 15, 18, 20, 21, 28, "
+        "30, 35, 36, 42, 45, 60];"
+    ) in html
 
 
 def test_infer_wall_layout_reweights_double_wide_images() -> None:

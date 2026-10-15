@@ -18,6 +18,7 @@ from .constants import (
     CLIP_MODEL,
     DEFAULT_WALL_ASSUMED_COLUMNS,
     DEDUPE_EMBEDDINGS_FILENAME,
+    WALL_DIVISIBLE_ZOOM_LEVELS,
     WALL_DOUBLE_WIDE_THRESHOLD,
     WALL_LAYOUT_MAX_PASSES,
     WALL_TITLE_TEMPLATE,
@@ -269,6 +270,7 @@ def generate_wall(
     title: str | None = None,
     double_wide_threshold: float = WALL_DOUBLE_WIDE_THRESHOLD,
     assume_columns: int = DEFAULT_WALL_ASSUMED_COLUMNS,
+    divisible_zoom: bool = False,
     verbose: int = 1,
     dry_run: bool = False,
 ) -> Path:
@@ -351,6 +353,7 @@ def generate_wall(
         wall_title=title or wall_title_from_directory(directory_path),
         similarity_matrix=similarity_matrix,
         show_grid_control=bool(similarity_matrix),
+        zoom_levels=WALL_DIVISIBLE_ZOOM_LEVELS if divisible_zoom else (),
     )
     if not dry_run:
         output_path.write_text(output, encoding="utf-8")

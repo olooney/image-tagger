@@ -155,6 +155,9 @@
         .tile.double-wide {
             grid-column: span 2;
         }
+        .wall.single-column .tile.double-wide {
+            grid-column: span 1;
+        }
         .tile.is-hidden { display: none; }
         .tile img {
             display: block;
@@ -222,7 +225,7 @@
         <div class="search-controls" aria-label="Wall controls">
             <label class="zoom-control" title="Cell size">
                 <span aria-hidden="true">−</span>
-                <input type="range" min="1" max="60" step="1" value="1" aria-label="Wall columns">
+                <input type="range" min="0" max="59" step="1" value="0" aria-label="Wall columns">
                 <span aria-hidden="true">+</span>
             </label>
             <button class="order-button" type="button" data-order="name" aria-label="Sort by filename" title="Sort by filename">Ⓐ</button>
@@ -247,6 +250,7 @@
     </div>
     <script>
         window.wallSimilarity = {{ similarity_matrix | tojson }};
+        window.wallZoomLevels = {{ zoom_levels | tojson }};
 
         const searchPanel = document.querySelector('.search-panel');
         const searchInput = searchPanel.querySelector('input');
@@ -270,12 +274,13 @@
         let gridRequestId = 0;
         let gridVersion = 0;
         let resizeFrame = 0;
+        let initialColumnCount = 1;
         const initialCellWidth = {{ cell_width }};
         const initialCellHeight = {{ cell_height }};
         const maximumColumnCount = 60;
-        const minimumColumnCount = tiles.some(
-            (tile) => tile.classList.contains('double-wide'),
-        ) ? 2 : 1;
+        const zoomLevels = window.wallZoomLevels.length > 0
+            ? window.wallZoomLevels
+            : Array.from({ length: maximumColumnCount }, (unused, index) => index + 1);
 
         const ASCII_EQUIVALENTS = {
             'ß': 'ss',
@@ -743,24 +748,48 @@
             arrangeTilesOnResize();
         };
 
+        const nearestZoomLevelIndex = (columnCount) => zoomLevels.reduce(
+            (nearestIndex, level, index) => (
+                Math.abs(level - columnCount) < Math.abs(zoomLevels[nearestIndex] - columnCount)
+                    ? index
+                    : nearestIndex
+            ),
+            0,
+        );
+
+        const formatColumnCount = (columnCount) => columnCount === 1
+            ? '1 column'
+            : `${columnCount} columns`;
+
         const syncZoomInput = () => {
-            zoomInput.min = String(minimumColumnCount);
-            zoomInput.max = String(maximumColumnCount);
-            zoomInput.value = String(getColumnCount());
+            const columnCount = getColumnCount();
+            zoomInput.min = '0';
+            zoomInput.max = String(zoomLevels.length - 1);
+            zoomInput.value = String(nearestZoomLevelIndex(columnCount));
+            zoomInput.setAttribute('aria-valuetext', formatColumnCount(columnCount));
         };
 
         const setColumnCount = (requestedCount) => {
-            const columnCount = Math.max(
-                minimumColumnCount,
+            const requestedLevel = Math.max(
+                1,
                 Math.min(maximumColumnCount, Math.round(Number(requestedCount))),
             );
+            const columnCount = zoomLevels[nearestZoomLevelIndex(requestedLevel)];
             const cellWidth = (wall.clientWidth - 0.5) / columnCount;
+            wall.classList.toggle('single-column', columnCount === 1);
             setCellWidth(cellWidth);
-            zoomInput.value = String(columnCount);
+            zoomInput.value = String(zoomLevels.indexOf(columnCount));
+            zoomInput.setAttribute('aria-valuetext', formatColumnCount(columnCount));
         };
 
         const zoomByColumns = (direction) => {
-            setColumnCount(getColumnCount() - direction);
+            const currentColumnCount = getColumnCount();
+            const nextLevel = direction > 0
+                ? [...zoomLevels].reverse().find((level) => level < currentColumnCount)
+                : zoomLevels.find((level) => level > currentColumnCount);
+            if (nextLevel !== undefined) {
+                setColumnCount(nextLevel);
+            }
         };
 
         const openSearch = () => {
@@ -818,7 +847,9 @@
 
         searchInput.addEventListener('input', filterTiles);
 
-        zoomInput.addEventListener('input', () => setColumnCount(zoomInput.value));
+        zoomInput.addEventListener('input', () => {
+            setColumnCount(zoomLevels[Number(zoomInput.value)]);
+        });
 
         searchCloseButton.addEventListener('click', closeSearch);
 
@@ -834,7 +865,7 @@
             if (isZoomShortcut) {
                 event.preventDefault();
                 if (event.key === '0') {
-                    setCellWidth(initialCellWidth);
+                    setColumnCount(initialColumnCount);
                 } else {
                     const direction = ['+', '='].includes(event.key) ? 1 : -1;
                     zoomByColumns(direction);
@@ -901,6 +932,7 @@
         window.addEventListener('resize', arrangeTilesOnResize);
 
         arrangeTiles();
+    initialColumnCount = getColumnCount();
     syncZoomInput();
         if (gridButton) {
             requestGridCalculation([...tiles], false);

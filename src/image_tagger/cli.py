@@ -343,6 +343,7 @@ def wall(args: argparse.Namespace) -> None:
         title=args.title,
         double_wide_threshold=args.double_wide_threshold,
         assume_columns=args.assume_columns,
+        divisible_zoom=args.divisible_zoom,
         verbose=args.verbose,
         dry_run=args.dry_run,
     )
@@ -701,6 +702,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=positive_int_arg,
         default=DEFAULT_WALL_ASSUMED_COLUMNS,
         help=f"Assume this many columns when computing grid order. Defaults to {DEFAULT_WALL_ASSUMED_COLUMNS}.",
+    )
+    wall_parser.add_argument(
+        "--divisible-zoom",
+        action="store_true",
+        help="Restrict zoom to column counts that evenly divide 1260.",
     )
     wall_parser.add_argument(
         "--preview", action=argparse.BooleanOptionalAction, default=True

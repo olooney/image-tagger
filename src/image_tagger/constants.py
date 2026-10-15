@@ -2,6 +2,29 @@ from pathlib import Path
 
 DEFAULT_WALL_RANDOM_SEED: int = 42
 DEFAULT_WALL_ASSUMED_COLUMNS: int = 12
+WALL_DIVISIBLE_ZOOM_LEVELS: tuple[int, ...] = (
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    9,
+    10,
+    12,
+    14,
+    15,
+    18,
+    20,
+    21,
+    28,
+    30,
+    35,
+    36,
+    42,
+    45,
+    60,
+)
 
 METADATA_FILENAME: Path = Path("image_metadata.csv")
 GALLERY_NAME: Path = Path("index.html")
