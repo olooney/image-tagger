@@ -142,7 +142,7 @@ def first_available_port(start_port: int = 8001) -> int:
 
 def review_category_options() -> list[str]:
     """Return category options from the configured shelf map."""
-    return review_stackmap().categories
+    return review_stackmap().review_categories
 
 
 def review_genre_options(metadata_path: Path) -> list[str]:

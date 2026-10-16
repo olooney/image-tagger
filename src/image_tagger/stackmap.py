@@ -1,14 +1,16 @@
 """Library shelf configuration loading and discovery."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
 STACKMAP_FILENAME: str = ".stackmap"
 SHELF_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SHELF_FLAG_PATTERN: re.Pattern[str] = re.compile(r"^(MANUAL|HIDDEN)\b")
+type ShelfFlag = Literal["manual", "hidden"]
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,7 @@ class StackMap:
     filename: Path
     shelves: dict[str, Path]
     shelf_descriptions: dict[str, str]
+    shelf_flags: dict[str, ShelfFlag] = field(default_factory=dict)
 
     @classmethod
     def load(cls, filename: Path) -> StackMap:
@@ -45,6 +48,7 @@ class StackMap:
 
         shelves: dict[str, Path] = {}
         shelf_descriptions: dict[str, str] = {}
+        shelf_flags: dict[str, ShelfFlag] = {}
         for alias, directory in contents.items():
             if not isinstance(alias, str) or not SHELF_NAME_PATTERN.fullmatch(alias):
                 raise ValueError(
@@ -64,6 +68,10 @@ class StackMap:
 
             if description := descriptions_by_line.get(len(shelves) - 1):
                 shelf_descriptions[alias] = description
+                if match := SHELF_FLAG_PATTERN.match(description):
+                    shelf_flags[alias] = (
+                        "manual" if match.group(1) == "MANUAL" else "hidden"
+                    )
 
         if "default" not in shelves:
             raise ValueError(
@@ -73,6 +81,7 @@ class StackMap:
             filename=resolved_filename,
             shelves=shelves,
             shelf_descriptions=shelf_descriptions,
+            shelf_flags=shelf_flags,
         )
 
     @property
@@ -83,15 +92,29 @@ class StackMap:
     @property
     def categories(self) -> list[str]:
         """Return shelves available for vision model categorization."""
-        return [alias for alias in self.shelves if alias != "default"]
+        return [
+            alias
+            for alias in self.shelves
+            if alias != "default" and alias not in self.shelf_flags
+        ]
+
+    @property
+    def review_categories(self) -> list[str]:
+        """Return shelves available for user categorization."""
+        return [
+            alias
+            for alias in self.shelves
+            if alias != "default" and self.shelf_flags.get(alias) != "hidden"
+        ]
 
     @property
     def category_descriptions(self) -> dict[str, str]:
         """Return optional prompt guidance for categorization shelves."""
+        categories = set(self.categories)
         return {
             alias: description
             for alias, description in self.shelf_descriptions.items()
-            if alias != "default"
+            if alias in categories
         }
 
     def directory_for(self, alias: str) -> Path | None:

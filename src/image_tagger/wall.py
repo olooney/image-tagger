@@ -46,17 +46,42 @@ def median_aspect_ratio(aspect_ratios: Iterable[float]) -> float:
     return (sorted_aspect_ratios[midpoint - 1] + sorted_aspect_ratios[midpoint]) / 2
 
 
-def image_aspect_ratios(filepaths: Iterable[Pathish]) -> dict[Path, float]:
-    """Return display width-to-height ratios keyed by image path."""
-    aspect_ratios: dict[Path, float] = {}
+def image_display_dimensions(
+    filepaths: Iterable[Pathish],
+) -> dict[Path, tuple[int, int]]:
+    """Return EXIF-oriented image dimensions keyed by path."""
+    dimensions: dict[Path, tuple[int, int]] = {}
     for filepath in filepaths:
         image_path = Path(filepath)
         with Image.open(image_path) as image:
-            width, height = ImageOps.exif_transpose(image).size
-        if height > 0:
-            aspect_ratios[image_path] = width / height
+            dimensions[image_path] = ImageOps.exif_transpose(image).size
+    return dimensions
 
-    return aspect_ratios
+
+def image_aspect_ratios(filepaths: Iterable[Pathish]) -> dict[Path, float]:
+    """Return display width-to-height ratios keyed by image path."""
+    return {
+        filepath: width / height
+        for filepath, (width, height) in image_display_dimensions(filepaths).items()
+        if height > 0
+    }
+
+
+def format_wall_layout_summary(image_count: int, double_wide_count: int) -> str:
+    """Format wall cell count and divisibility statistics."""
+    cell_count = image_count + double_wide_count
+
+    divisor_range = 20
+    n_divisors = 1
+    for width in range(2, divisor_range + 1):
+        if cell_count % width == 0:
+            n_divisors += 1
+    divisibility_percentage = 100 * n_divisors / divisor_range
+
+    return (
+        f"{image_count} images + {double_wide_count} double-wide = "
+        f"{cell_count} ({divisibility_percentage}%)"
+    )
 
 
 def infer_wall_layout(
@@ -359,22 +384,7 @@ def generate_wall(
         output_path.write_text(output, encoding="utf-8")
     if verbose >= 1:
         double_wide_count = sum(1 for item in items if item["is_double_wide"])
-        cell_count = len(items) + double_wide_count
-        # Preserve the historic diagnostic denominator so tiny walls still report
-        # a meaningful divisibility signal.
-        reported_cell_count = cell_count if cell_count >= 20 else 1080
-
-        DIVISOR_RANGE = 20
-        n_divisors = 1
-        for width in range(2, DIVISOR_RANGE + 1):
-            if reported_cell_count % width == 0:
-                n_divisors += 1
-        divisibility_percentage = 100 * n_divisors / DIVISOR_RANGE
-
         if not dry_run:
             print(f"wrote {quote_display_path(output_path)}")
-        print(
-            f"{len(items)} images + "
-            f"{double_wide_count} double-wide = {reported_cell_count} ({divisibility_percentage}%)"
-        )
+        print(format_wall_layout_summary(len(items), double_wide_count))
     return output_path

@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 
-from .compare import _reviewed_cached_image_paths, image_dimensions
+from .compare import _reviewed_cached_image_paths
 from .constants import (
     CLIP_MODEL,
     DEDUPE_EMBEDDINGS_FILENAME,
@@ -16,6 +16,11 @@ from .constants import (
 )
 from .tagging import find_images
 from .util import Pathish, quote_display_path
+from .wall import (
+    format_wall_layout_summary,
+    image_display_dimensions,
+    infer_wall_layout,
+)
 
 
 def _format_report_counts(title: str, counts: Counter[str]) -> list[str]:
@@ -59,13 +64,14 @@ def _metadata_paths(row: Mapping[str, str]) -> set[Path]:
 def _format_largest_images(
     directory_path: Path,
     image_paths: set[Path],
+    dimensions_by_path: Mapping[Path, tuple[int, int]],
 ) -> list[str]:
     """Format the largest image paths as an aligned report table."""
     sorted_paths = sorted(
         image_paths,
         key=lambda path: (
-            -image_dimensions(path)[1],
-            -image_dimensions(path)[0],
+            -dimensions_by_path[path][1],
+            -dimensions_by_path[path][0],
             -path.stat().st_size,
             path,
         ),
@@ -73,7 +79,7 @@ def _format_largest_images(
     items = [
         (
             quote_display_path(path.relative_to(directory_path)),
-            f"{image_dimensions(path)[0]}x{image_dimensions(path)[1]}",
+            f"{dimensions_by_path[path][0]}x{dimensions_by_path[path][1]}",
             _format_file_size(path.stat().st_size),
         )
         for path in sorted_paths
@@ -104,6 +110,14 @@ def _format_filename_mismatches(
     ]
 
 
+def _format_report_paths(directory_path: Path, paths: list[Path]) -> list[str]:
+    """Format relative image paths as indented report details."""
+    return [
+        f"    {quote_display_path(path.relative_to(directory_path))}"
+        for path in paths
+    ]
+
+
 def gallery_is_out_of_date(directory_path: Path, image_paths: list[Path]) -> bool:
     """Return whether the gallery index predates the newest image."""
     gallery_path = directory_path / GALLERY_NAME
@@ -121,6 +135,7 @@ def report_images(
     directory: Pathish,
     metadata_filename: Pathish,
     large_image_threshold: int = DEFAULT_LARGE_IMAGE_THRESHOLD,
+    verbose: int = 1,
 ) -> str:
     """Build a text report for the images in one directory tree."""
     directory_path = Path(directory)
@@ -128,6 +143,17 @@ def report_images(
         path
         for path in directory_path.rglob("*")
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    dimensions_by_path = image_display_dimensions(image_paths)
+    aspect_ratios = {
+        path: width / height
+        for path, (width, height) in dimensions_by_path.items()
+        if height > 0
+    }
+    _, double_wide_paths = infer_wall_layout(aspect_ratios)
+    wall_layout_summary = format_wall_layout_summary(
+        len(image_paths),
+        len(double_wide_paths),
     )
     metadata_by_path: dict[Path, dict[str, str]] = {}
     metadata_path = Path(metadata_filename)
@@ -141,12 +167,12 @@ def report_images(
     category_counts: Counter[str] = Counter()
     genre_counts: Counter[str] = Counter()
     tag_counts: Counter[str] = Counter()
-    missing_metadata_count = 0
+    missing_metadata_paths: list[Path] = []
     clean_filename_mismatches: list[tuple[Path, str]] = []
     for path in image_paths:
         row = metadata_by_path.get(path.resolve())
         if row is None:
-            missing_metadata_count += 1
+            missing_metadata_paths.append(path)
             continue
         category = row.get("category", "").strip()
         genre = row.get("genre", "").strip()
@@ -172,7 +198,7 @@ def report_images(
         DEFAULT_AUTOMATIC_THRESHOLD,
         DEFAULT_LLM_THRESHOLD,
     )
-    unreviewed_count = len(dedupe_image_paths) - len(reviewed_paths)
+    unreviewed_paths = sorted(set(dedupe_image_paths) - reviewed_paths)
     top_tags = Counter(dict(tag_counts.most_common(20)))
     large_image_paths = [
         path for path in image_paths if path.stat().st_size > large_image_threshold
@@ -180,11 +206,11 @@ def report_images(
     largest_paths = {
         *sorted(
             large_image_paths,
-            key=lambda path: (-image_dimensions(path)[0], path),
+            key=lambda path: (-dimensions_by_path[path][0], path),
         )[:5],
         *sorted(
             large_image_paths,
-            key=lambda path: (-image_dimensions(path)[1], path),
+            key=lambda path: (-dimensions_by_path[path][1], path),
         )[:5],
         *sorted(
             large_image_paths,
@@ -193,21 +219,29 @@ def report_images(
     }
 
     sections = [
-        [f"Number of images: {len(image_paths)}"],
+        [f"Number of images: {len(image_paths)}", wall_layout_summary],
         _format_report_counts("Extensions", extension_counts),
         _format_report_counts("Categories", category_counts),
         _format_report_counts("Genres", genre_counts),
         _format_report_counts("Tags", top_tags),
     ]
     outstanding_checks: list[str] = []
-    if missing_metadata_count:
+    if missing_metadata_paths:
         outstanding_checks.append(
-            f"Number of images not in metadata: {missing_metadata_count}"
+            f"Number of images not in metadata: {len(missing_metadata_paths)}"
         )
-    if unreviewed_count:
+        if verbose >= 2:
+            outstanding_checks.extend(
+                _format_report_paths(directory_path, missing_metadata_paths)
+            )
+    if unreviewed_paths:
         outstanding_checks.append(
-            f"Number of images not reviewed for dupes: {unreviewed_count}"
+            f"Number of images not reviewed for dupes: {len(unreviewed_paths)}"
         )
+        if verbose >= 2:
+            outstanding_checks.extend(
+                _format_report_paths(directory_path, unreviewed_paths)
+            )
     if clean_filename_mismatches:
         outstanding_checks.append(
             "Number of images where the filename does not match the clean filename: "
@@ -228,7 +262,11 @@ def report_images(
             [
                 "Largest Images:",
                 "",
-                *_format_largest_images(directory_path, largest_paths),
+                *_format_largest_images(
+                    directory_path,
+                    largest_paths,
+                    dimensions_by_path,
+                ),
             ]
         )
     return "\n\n".join("\n".join(section) for section in sections if section)

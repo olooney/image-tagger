@@ -228,11 +228,9 @@ def total_size(
 
 
 def connect_to_openai() -> Any:
-    """Create an OpenAI client using local credentials."""
+    """Create an OpenAI client using standard SDK configuration."""
     import openai
 
-    openai_credentials_filename = Path.home() / ".openai" / "credentials.yaml"
-    Credentials.load(openai_credentials_filename)
     client = openai.OpenAI()
     return client
 

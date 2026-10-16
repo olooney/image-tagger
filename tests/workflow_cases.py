@@ -20,7 +20,7 @@ from PIL import Image
 from pydantic import BaseModel
 from send2trash.exceptions import TrashPermissionError
 
-from image_tagger import cli, compare, dedupe, review_app, tagging, transform
+from image_tagger import cli, compare, dedupe, review_app, tagging, transform, wall
 from image_tagger.compare import (
     ClipImageComparisonMethod,
     EmbeddingCache,
@@ -1063,16 +1063,26 @@ def test_stackmap_resolves_relative_shelves_and_discovers_parent(
     nested_directory.mkdir(parents=True)
     stackmap_filename = workspace / ".stackmap"
     stackmap_filename.write_text(
-        "default: shelves/inbox\nart: shelves/art # paintings and drawings\n",
+        "default: shelves/inbox\n"
+        "art: shelves/art # paintings and drawings\n"
+        "rejects: shelves/rejects #    MANUAL reserved for manual use\n"
+        "thumbs: shelves/thumbs # HIDDEN generated thumbnails\n"
+        "lowercase: shelves/lowercase # manual remains ordinary guidance\n",
         encoding="utf-8",
     )
 
     stackmap = StackMap.load(stackmap_filename)
 
     assert stackmap.default_directory == workspace / "shelves" / "inbox"
-    assert stackmap.categories == ["art"]
-    assert stackmap.category_descriptions == {"art": "paintings and drawings"}
+    assert stackmap.categories == ["art", "lowercase"]
+    assert stackmap.review_categories == ["art", "rejects", "lowercase"]
+    assert stackmap.shelf_flags == {"rejects": "manual", "thumbs": "hidden"}
+    assert stackmap.category_descriptions == {
+        "art": "paintings and drawings",
+        "lowercase": "manual remains ordinary guidance",
+    }
     assert stackmap.directory_for("art") == workspace / "shelves" / "art"
+    assert stackmap.directory_for("thumbs") == workspace / "shelves" / "thumbs"
     assert find_stackmap(nested_directory) == stackmap_filename
 
 
@@ -1113,7 +1123,8 @@ def test_cli_directory_alias_uses_stackmap_before_local_path(
     shelf_directory.mkdir(parents=True)
     stackmap_filename = tmp_path / ".stackmap"
     stackmap_filename.write_text(
-        f"default: {local_directory}\nbooks: {shelf_directory}\n",
+        f"default: {local_directory}\n"
+        f"books: {shelf_directory} # HIDDEN available only by alias\n",
         encoding="utf-8",
     )
     calls: list[Path] = []
@@ -1225,8 +1236,11 @@ def test_report_cli_summarizes_images_metadata_and_dedupe_status(
     output = run_cli("report", str(tmp_path), "--large-image-threshold", "1B")
 
     assert "Number of images: 4" in output
+    assert "4 images + 1 double-wide = 5 (10.0%)" in output
     assert (
-        "Number of images: 4\n\nExtensions:\n    .jpg     3\n    .png     1" in output
+        "Number of images: 4\n"
+        "4 images + 1 double-wide = 5 (10.0%)\n\n"
+        "Extensions:\n    .jpg     3\n    .png     1" in output
     )
     assert "\n\nCategories:\n    art       2\n    photo     1" in output
     assert "\n\nGenres:\n    painting     2\n    portrait     1" in output
@@ -1237,6 +1251,7 @@ def test_report_cli_summarizes_images_metadata_and_dedupe_status(
         "Number of images where the filename does not match the clean filename: 1"
         in output
     )
+    assert "Number of images not in metadata: 1\n    missing.jpg" not in output
     assert "tall.png     clean_tall.png" in output
     assert "\n\nLargest Images:\n\n" in output
     assert "Biggest images:" not in output
@@ -1255,6 +1270,43 @@ def test_report_cli_summarizes_images_metadata_and_dedupe_status(
             output.index("missing.jpg"),
         ]
     )
+
+    verbose_output = run_cli(
+        "report",
+        str(tmp_path),
+        "--large-image-threshold",
+        "1B",
+        "-v",
+    )
+    assert (
+        "Number of images not in metadata: 1\n"
+        "    missing.jpg\n"
+        "Number of images not reviewed for dupes: 1\n"
+        "    missing.jpg"
+        in verbose_output
+    )
+
+
+def test_report_opens_each_image_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reuse one dimension scan for wall and largest-image reporting."""
+    image_paths = [tmp_path / "wide.png", tmp_path / "square.png"]
+    Image.new("RGB", (20, 10)).save(image_paths[0])
+    Image.new("RGB", (10, 10)).save(image_paths[1])
+    open_counts = {path: 0 for path in image_paths}
+    original_open = wall.Image.open
+
+    def counting_open(path: Path):
+        open_counts[path] += 1
+        return original_open(path)
+
+    monkeypatch.setattr(wall.Image, "open", counting_open)
+
+    report_images(tmp_path, tmp_path / "image_metadata.csv")
+
+    assert open_counts == {path: 1 for path in image_paths}
 
 
 def test_report_omits_empty_outstanding_checks_section(tmp_path: Path) -> None:
@@ -2154,8 +2206,11 @@ def test_review_app_categories_follow_configured_stackmap(
             "default": uploads_dir,
             "field_notes": tmp_path / "field_notes",
             "portraits": tmp_path / "portraits",
+            "rejects": tmp_path / "rejects",
+            "thumbs": tmp_path / "thumbs",
         },
         shelf_descriptions={},
+        shelf_flags={"rejects": "manual", "thumbs": "hidden"},
     )
     review_app.set_review_metadata(metadata_filename, stackmap)
 
@@ -2164,6 +2219,8 @@ def test_review_app_categories_follow_configured_stackmap(
     assert response.status_code == 200
     assert '<option value="field_notes">field_notes</option>' in response.text
     assert '<option value="portraits">portraits</option>' in response.text
+    assert '<option value="rejects">rejects</option>' in response.text
+    assert '<option value="thumbs">thumbs</option>' not in response.text
     assert '<option value="photography">photography</option>' not in response.text
     assert '<option value="legacy">legacy</option>' not in response.text
 
@@ -2643,7 +2700,7 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     html = wall_filename.read_text(encoding="utf-8")
     assert output == (
         f"wrote {quote_display_path(wall_filename)}\n"
-        "3 images + 1 double-wide = 1080 (65.0%)\n"
+        "3 images + 1 double-wide = 4 (15.0%)\n"
     )
     assert wall_filename.exists()
     assert html.startswith("<!doctype html>")
@@ -2730,7 +2787,7 @@ def test_wall_cli_dry_run_calculates_layout_without_writing(
 
     output = run_cli("wall", str(uploads_dir), "--no-preview", "--dry-run")
 
-    assert output == "1 images + 0 double-wide = 1080 (65.0%)\n"
+    assert output == "1 images + 0 double-wide = 1 (5.0%)\n"
     assert not (uploads_dir / "index.html").exists()
 
 

@@ -102,13 +102,23 @@ paths may be absolute or relative to the `.stackmap` file itself:
 default: shelves/inbox
 art: shelves/art # paintings, drawings, and other visual art
 books: shelves/books
+rejects: shelves/rejects # MANUAL reserved for manual use
+book_thumbs: shelves/book_thumbs # HIDDEN generated thumbnails
 ```
 
 An inline comment after a shelf path is passed to the tagging prompt as guidance
-for that category; it does not change the shelf identifier or path.
+for that category. If the first word of the comment is exactly `MANUAL` or
+`HIDDEN`, it instead controls the shelf's visibility; leading whitespace and
+subsequent comment text are ignored when detecting the flag:
+
+* Normal shelves are available to the vision model, review tools, and CLI aliases.
+* `MANUAL` shelves are excluded from vision-model structured output but remain
+	available in review-tool category dropdowns and as CLI aliases.
+* `HIDDEN` shelves are excluded from both the vision model and review tools but
+	remain available as CLI aliases.
 
 If `DIRECTORY` is omitted, tools use the `default` shelf. The `default` shelf
-is an inbox and never a tagging category; every other shelf name is the
+is an inbox and never a tagging category. Unflagged shelf names form the
 authoritative category list passed to the vision model. Metadata is written to
 `image_metadata.csv` inside the selected directory.
 
@@ -171,7 +181,11 @@ in more or less interesting image walls is debatable, but clusters are apparent 
 the output.
 
 `image-tagger thumbnail` copies a directory of images and their metadata to a new
-directory, converting each image into a smaller thumbnail.
+directory, converting each image into a smaller thumbnail. Copied metadata paths
+and dedupe-cache fingerprints are translated to the generated files. Images that
+are currently reviewed remain reviewed in the thumbnail collection, on the
+assumption that resizing does not introduce duplicates; genuine source metadata
+and dedupe-review gaps remain visible in reports.
 
 `image-tagger gallery` produces a static HTML version of the review tool showing the
 image and its inferred metadata side-by-side

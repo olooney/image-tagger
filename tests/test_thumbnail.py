@@ -1,3 +1,4 @@
+import csv
 import os
 import sys
 from pathlib import Path
@@ -7,6 +8,13 @@ import pytest
 from PIL import Image
 
 from image_tagger import cli
+from image_tagger.compare import (
+    EmbeddingCache,
+    _load_embedding_cache,
+    _save_embedding_cache,
+)
+from image_tagger.constants import CLIP_MODEL, DEDUPE_EMBEDDINGS_FILENAME
+from image_tagger.report import report_images
 from image_tagger.thumbnail import create_thumbnails
 
 
@@ -53,6 +61,98 @@ def test_create_thumbnails_resizes_images_and_copies_publish_files(
         source / "index.html"
     ).read_bytes()
     assert not (destination / "notes.txt").exists()
+
+
+def test_create_thumbnails_preserves_source_report_status(tmp_path: Path) -> None:
+    """Translate metadata and reviewed cache state to generated thumbnails."""
+    source = tmp_path / "books"
+    destination = tmp_path / "book_thumbs"
+    source.mkdir()
+    destination.mkdir()
+    removed_from_source = destination / "removed_from_source.jpg"
+    Image.new("RGB", (10, 10), "blue").save(removed_from_source)
+    image_paths = [
+        source / "reviewed.jpg",
+        source / "unreviewed.jpg",
+        source / "missing_metadata.jpg",
+    ]
+    for path in image_paths:
+        Image.new("RGB", (800, 1600), "red").save(path)
+
+    metadata_path = source / "image_metadata.csv"
+    with metadata_path.open("w", newline="", encoding="utf-8") as metadata_file:
+        writer = csv.DictWriter(
+            metadata_file,
+            fieldnames=[
+                "status",
+                "original_filepath",
+                "original_filename",
+                "clean_filename",
+                "category",
+                "genre",
+                "tags",
+            ],
+        )
+        writer.writeheader()
+        for path in image_paths[:2]:
+            writer.writerow(
+                {
+                    "status": "ok",
+                    "original_filepath": path,
+                    "original_filename": path.name,
+                    "clean_filename": path.name,
+                    "category": "books",
+                    "genre": "reference",
+                    "tags": "[]",
+                }
+            )
+
+    source_entries = {
+        str(path.resolve()): (
+            path.stat().st_size,
+            path.stat().st_mtime_ns,
+            np.ones(2, dtype=np.float64),
+        )
+        for path in image_paths
+    }
+    reviewed_key = str(image_paths[0].resolve())
+    _save_embedding_cache(
+        source / DEDUPE_EMBEDDINGS_FILENAME,
+        CLIP_MODEL,
+        EmbeddingCache(
+            entries=source_entries,
+            reviewed_thresholds={reviewed_key: (0.99, 0.85)},
+        ),
+    )
+    (source / "index.html").write_text("<title>Books</title>")
+
+    create_thumbnails(source, destination, verbose=0)
+
+    assert not removed_from_source.exists()
+    source_report = report_images(source, metadata_path)
+    destination_report = report_images(
+        destination,
+        destination / metadata_path.name,
+    )
+    assert destination_report == source_report
+    destination_index = destination / "index.html"
+    assert destination_index.stat().st_mtime_ns >= max(
+        path.stat().st_mtime_ns
+        for path in destination.iterdir()
+        if path.suffix.lower() == ".jpg"
+    )
+
+    destination_cache = _load_embedding_cache(
+        destination / DEDUPE_EMBEDDINGS_FILENAME,
+        CLIP_MODEL,
+    )
+    destination_reviewed = destination / image_paths[0].name
+    destination_key = str(destination_reviewed.resolve())
+    assert set(destination_cache.reviewed_thresholds) == {destination_key}
+    assert destination_cache.entries[destination_key][:2] == (
+        destination_reviewed.stat().st_size,
+        destination_reviewed.stat().st_mtime_ns,
+    )
 
 
 def test_thumbnail_cli_uses_defaults_and_resolves_source_alias(

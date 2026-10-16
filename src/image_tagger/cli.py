@@ -358,6 +358,7 @@ def report(args: argparse.Namespace) -> None:
             args.directory,
             args.metadata_filename,
             args.large_image_threshold,
+            verbose=args.verbose,
         )
     )
 
