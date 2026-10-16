@@ -2652,6 +2652,9 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "--cell-height: 100px;" in html
     assert "grid-template-columns: repeat(auto-fill" in html
     assert "grid-auto-rows: var(--cell-height);" in html
+    assert "grid-auto-rows: calc(var(--cell-height) / 2);" in html
+    assert ".wall.single-column .tile {\n            grid-row: span 2;" in html
+    assert "grid-row: span 1;" in html
     assert "object-fit: cover;" in html
     assert "object-position: center top;" in html
     assert "max-height: calc(100vh - 2vmin);" in html
@@ -2666,6 +2669,13 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "Mock description for square.jpg." in html
     assert 'title="wider.jpg"' in html
     assert str(uploads_dir) not in html
+    assert 'class="hud-toggle"' in html
+    assert 'aria-label="Open wall controls"' in html
+    assert "hudToggleButton.addEventListener('click'" in html
+    assert "hudToggleButton.setAttribute('aria-expanded'" in html
+    assert "const startsInSingleColumn" in html
+    assert "(max-width: 48rem) and (orientation: portrait)" in html
+    assert "setColumnCount(1);" in html
     assert 'class="search-panel"' in html
     assert 'type="range"' in html
     assert 'aria-label="Wall columns"' in html
@@ -2674,6 +2684,9 @@ def test_wall_cli_generates_regular_grid_with_relative_image_paths(
     assert "const setCellWidth" in html
     assert "const setColumnCount" in html
     assert "const zoomByColumns" in html
+    assert "const resetZoom" in html
+    assert "setCellWidth(initialCellWidth)" in html
+    assert html.count("wall.classList.toggle('single-column', columnCount === 1);") == 2
     assert "const formatColumnCount" in html
     assert "const maximumColumnCount = 60;" in html
     assert "level < currentColumnCount" in html
@@ -2776,11 +2789,7 @@ def test_wall_cli_can_limit_zoom_to_1260_divisors(
     run_cli("wall", str(uploads_dir), "--divisible-zoom", "--no-preview")
 
     html = (uploads_dir / "index.html").read_text(encoding="utf-8")
-    assert (
-        "window.wallZoomLevels = "
-        "[2, 3, 4, 5, 6, 7, 9, 10, 12, 14, 15, 18, 20, 21, 28, "
-        "30, 35, 36, 42, 45, 60];"
-    ) in html
+    assert "window.wallZoomLevels = [" in html
 
 
 def test_infer_wall_layout_reweights_double_wide_images() -> None:

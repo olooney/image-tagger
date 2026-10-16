@@ -20,6 +20,32 @@
             background: #111;
         }
         body { overflow-x: hidden; }
+        .hud-toggle {
+            position: fixed;
+            top: 0.75rem;
+            right: 0.75rem;
+            z-index: 20;
+            display: none;
+            place-items: center;
+            width: 2rem;
+            height: 2rem;
+            padding: 0;
+            border: 1px solid rgb(255 255 255 / 28%);
+            border-radius: 0.2rem;
+            background: #111;
+            color: #fff;
+            font: 1rem/1 Georgia, 'Times New Roman', serif;
+            cursor: pointer;
+        }
+        .hud-toggle:hover { background: #242424; }
+        .hud-toggle:focus-visible {
+            outline: 2px solid #fff;
+            outline-offset: 2px;
+        }
+        @media (max-width: 48rem), (pointer: coarse) {
+            .hud-toggle { display: grid; }
+            .hud-toggle[aria-expanded="true"] { display: none; }
+        }
         .search-panel {
             position: fixed;
             top: 0.75rem;
@@ -155,8 +181,15 @@
         .tile.double-wide {
             grid-column: span 2;
         }
+        .wall.single-column {
+            grid-auto-rows: calc(var(--cell-height) / 2);
+        }
+        .wall.single-column .tile {
+            grid-row: span 2;
+        }
         .wall.single-column .tile.double-wide {
             grid-column: span 1;
+            grid-row: span 1;
         }
         .tile.is-hidden { display: none; }
         .tile img {
@@ -217,7 +250,8 @@
     </style>
 </head>
 <body>
-    <form class="search-panel" role="search" aria-label="Search image wall">
+    <button class="hud-toggle" type="button" aria-label="Open wall controls" aria-controls="wall-controls" aria-expanded="false" title="Wall controls">☰</button>
+    <form class="search-panel" id="wall-controls" role="search" aria-label="Search image wall">
         <div class="search-row">
             <input type="search" aria-label="Search filenames and titles" autocomplete="off" spellcheck="false">
             <button class="search-close" type="button" aria-label="Clear and close search"></button>
@@ -252,6 +286,7 @@
         window.wallSimilarity = {{ similarity_matrix | tojson }};
         window.wallZoomLevels = {{ zoom_levels | tojson }};
 
+        const hudToggleButton = document.querySelector('.hud-toggle');
         const searchPanel = document.querySelector('.search-panel');
         const searchInput = searchPanel.querySelector('input');
         const searchCloseButton = searchPanel.querySelector('.search-close');
@@ -274,13 +309,15 @@
         let gridRequestId = 0;
         let gridVersion = 0;
         let resizeFrame = 0;
-        let initialColumnCount = 1;
         const initialCellWidth = {{ cell_width }};
         const initialCellHeight = {{ cell_height }};
         const maximumColumnCount = 60;
         const zoomLevels = window.wallZoomLevels.length > 0
             ? window.wallZoomLevels
             : Array.from({ length: maximumColumnCount }, (unused, index) => index + 1);
+        const startsInSingleColumn = window.matchMedia(
+            '(max-width: 48rem) and (orientation: portrait)',
+        ).matches;
 
         const ASCII_EQUIVALENTS = {
             'ß': 'ss',
@@ -763,6 +800,7 @@
 
         const syncZoomInput = () => {
             const columnCount = getColumnCount();
+            wall.classList.toggle('single-column', columnCount === 1);
             zoomInput.min = '0';
             zoomInput.max = String(zoomLevels.length - 1);
             zoomInput.value = String(nearestZoomLevelIndex(columnCount));
@@ -792,10 +830,18 @@
             }
         };
 
-        const openSearch = () => {
+        const resetZoom = () => {
+            wall.classList.remove('single-column');
+            setCellWidth(initialCellWidth);
+        };
+
+        const openSearch = (focusSearch = true) => {
             searchPanel.classList.add('is-open');
-            searchInput.focus();
-            searchInput.select();
+            hudToggleButton.setAttribute('aria-expanded', 'true');
+            if (focusSearch) {
+                searchInput.focus();
+                searchInput.select();
+            }
         };
 
         const closeSearch = () => {
@@ -803,6 +849,7 @@
             filterTiles();
             searchPanel.classList.remove('is-open');
             searchInput.blur();
+            hudToggleButton.setAttribute('aria-expanded', 'false');
         };
 
         const openLightbox = (tile) => {
@@ -847,6 +894,8 @@
 
         searchInput.addEventListener('input', filterTiles);
 
+        hudToggleButton.addEventListener('click', () => openSearch(false));
+
         zoomInput.addEventListener('input', () => {
             setColumnCount(zoomLevels[Number(zoomInput.value)]);
         });
@@ -865,7 +914,7 @@
             if (isZoomShortcut) {
                 event.preventDefault();
                 if (event.key === '0') {
-                    setColumnCount(initialColumnCount);
+                    resetZoom();
                 } else {
                     const direction = ['+', '='].includes(event.key) ? 1 : -1;
                     zoomByColumns(direction);
@@ -932,8 +981,11 @@
         window.addEventListener('resize', arrangeTilesOnResize);
 
         arrangeTiles();
-    initialColumnCount = getColumnCount();
-    syncZoomInput();
+        if (startsInSingleColumn) {
+            setColumnCount(1);
+        } else {
+            syncZoomInput();
+        }
         if (gridButton) {
             requestGridCalculation([...tiles], false);
         }

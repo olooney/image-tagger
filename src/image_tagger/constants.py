@@ -3,6 +3,7 @@ from pathlib import Path
 DEFAULT_WALL_RANDOM_SEED: int = 42
 DEFAULT_WALL_ASSUMED_COLUMNS: int = 12
 WALL_DIVISIBLE_ZOOM_LEVELS: tuple[int, ...] = (
+    1,
     2,
     3,
     4,
